@@ -1,0 +1,9 @@
+.build/
+work/
+backend/node_modules/
+backend/.test-dist/
+backend/.vercel/
+backend/.env*
+!backend/.env.example
+outputs/
+.DS_Store

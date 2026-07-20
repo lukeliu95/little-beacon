@@ -1,0 +1,19 @@
+{
+  "games": [
+    "com.valvesoftware.steam",
+    "com.blizzard.battle.net",
+    "com.epicgames.launcher",
+    "com.mojang.minecraftlauncher",
+    "com.riotgames.leagueoflegends",
+    "com.roblox.roblox"
+  ],
+  "videoDomains": [
+    "youtube.com",
+    "bilibili.com",
+    "netflix.com",
+    "twitch.tv",
+    "vimeo.com",
+    "iqiyi.com",
+    "youku.com"
+  ]
+}
