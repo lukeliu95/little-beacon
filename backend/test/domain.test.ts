@@ -8,8 +8,10 @@ import {
   hashToken,
   isAllowedDuration,
   secureStringEqual,
+  shouldAcceptRuleRevision,
   validateRuleSet,
 } from "../src/domain.js";
+import { asISO } from "../src/http.js";
 
 test("tokens are random, URL-safe, and only hashes are stable", () => {
   const first = generateToken();
@@ -45,4 +47,14 @@ test("starter rules pass validation and malformed windows do not", () => {
   const malformed = structuredClone(rules);
   malformed.activityRules[0]!.windows[0]!.weekday = 9;
   assert.equal(validateRuleSet(malformed), false);
+});
+
+test("API dates use seconds precision for older Apple ISO-8601 decoders", () => {
+  assert.equal(asISO(new Date("2026-07-20T12:34:56.123Z")), "2026-07-20T12:34:56Z");
+});
+
+test("stale rule uploads cannot replace a newer revision", () => {
+  assert.equal(shouldAcceptRuleRevision(4, 3), false);
+  assert.equal(shouldAcceptRuleRevision(4, 4), true);
+  assert.equal(shouldAcceptRuleRevision(4, 5), true);
 });

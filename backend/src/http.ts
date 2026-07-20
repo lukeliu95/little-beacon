@@ -119,6 +119,6 @@ export function requireMethod(request: Request, method: string): void {
 }
 
 export function asISO(value: unknown): string {
-  if (value instanceof Date) return value.toISOString();
-  return new Date(String(value)).toISOString();
+  const date = value instanceof Date ? value : new Date(String(value));
+  return date.toISOString().replace(/\.\d{3}Z$/, "Z");
 }

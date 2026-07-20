@@ -38,6 +38,10 @@ export function isAllowedDuration(value: unknown): value is 15 | 30 | 60 {
   return value === 15 || value === 30 || value === 60;
 }
 
+export function shouldAcceptRuleRevision(currentRevision: number, incomingRevision: number): boolean {
+  return Number.isInteger(incomingRevision) && incomingRevision >= currentRevision;
+}
+
 export function defaultRules() {
   const windows = (days: number[], startMinute: number, endMinute: number) =>
     days.map((weekday) => ({ id: randomUUID(), weekday, startMinute, endMinute }));

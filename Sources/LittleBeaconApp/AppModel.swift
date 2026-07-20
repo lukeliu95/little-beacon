@@ -116,7 +116,7 @@ final class AppModel: ObservableObject {
                 let oldEventIDs = Set(snapshot.events.map(\.id))
                 let oldRequestIDs = Set(snapshot.requests.map(\.id))
                 let response = try await client.fetchParentSync()
-                snapshot.rules = response.rules
+                snapshot.rules = snapshot.rules.acceptingRemote(response.rules)
                 snapshot.events = response.events
                 snapshot.requests = response.requests
                 if let status = response.status { snapshot.currentStatus = status }
@@ -135,9 +135,12 @@ final class AppModel: ObservableObject {
                 }
             case .child:
                 let response = try await client.fetchChildSync()
-                snapshot.rules = response.rules
+                snapshot.rules = snapshot.rules.acceptingRemote(response.rules)
                 snapshot.temporaryGrants = response.grants
                 snapshot.requests = response.requests
+                snapshot.lastRulesSyncAt = Date()
+                snapshot.prune()
+                persist()
                 try await client.updateStatus(snapshot.currentStatus)
                 try await flushPendingEvents(client: client)
             case .unconfigured:
@@ -171,7 +174,8 @@ final class AppModel: ObservableObject {
         }
         snapshot.rules.revision += 1
         persist()
-        Task { await uploadRulesIfPossible() }
+        let rulesToUpload = snapshot.rules
+        Task { await uploadRulesIfPossible(rulesToUpload) }
     }
 
     func addOverride(target: OverrideTarget, value: String, category: ActivityCategory) {
@@ -183,14 +187,16 @@ final class AppModel: ObservableObject {
         )
         snapshot.rules.revision += 1
         persist()
-        Task { await uploadRulesIfPossible() }
+        let rulesToUpload = snapshot.rules
+        Task { await uploadRulesIfPossible(rulesToUpload) }
     }
 
     func removeOverride(id: UUID) {
         snapshot.rules.overrides.removeAll { $0.id == id }
         snapshot.rules.revision += 1
         persist()
-        Task { await uploadRulesIfPossible() }
+        let rulesToUpload = snapshot.rules
+        Task { await uploadRulesIfPossible(rulesToUpload) }
     }
 
     func requestTemporaryUse(category: ActivityCategory, durationMinutes: Int) {
@@ -345,11 +351,13 @@ final class AppModel: ObservableObject {
         snapshot.pendingEventIDs.insert(id)
     }
 
-    private func uploadRulesIfPossible() async {
+    private func uploadRulesIfPossible(_ rules: RuleSet) async {
         guard snapshot.role == .parent, hasRemoteConfiguration else { return }
         do {
-            try await authenticatedClient().updateRules(snapshot.rules)
-            connectionMessage = "规则已同步"
+            try await authenticatedClient().updateRules(rules)
+            if snapshot.rules.revision == rules.revision {
+                connectionMessage = "规则版本 \(rules.revision) 已同步"
+            }
         } catch {
             lastError = error.localizedDescription
         }

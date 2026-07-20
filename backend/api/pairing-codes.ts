@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { database } from "../src/db.js";
 import { generatePairingCode, hashPairingCode } from "../src/domain.js";
-import { authenticate, errorResponse, HttpError, json, nodeHandler, requireMethod } from "../src/http.js";
+import { asISO, authenticate, errorResponse, HttpError, json, nodeHandler, requireMethod } from "../src/http.js";
 
 async function handler(request: Request): Promise<Response> {
   try {
@@ -15,7 +15,7 @@ async function handler(request: Request): Promise<Response> {
     const expiresAt = new Date(Date.now() + 10 * 60_000);
     await sql`INSERT INTO pairing_codes (id, household_id, code_hash, expires_at)
       VALUES (${randomUUID()}, ${credential.householdID}, ${hashPairingCode(code, secret)}, ${expiresAt.toISOString()})`;
-    return json({ code, expiresAt: expiresAt.toISOString() }, 201);
+    return json({ code, expiresAt: asISO(expiresAt) }, 201);
   } catch (error) {
     return errorResponse(error);
   }

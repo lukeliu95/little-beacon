@@ -2,6 +2,18 @@ import Foundation
 import Testing
 @testable import LittleBeaconCore
 
+@Test func staleRemoteRulesCannotOverwriteNewerLocalRules() {
+    var local = RuleSet.starter
+    local.revision = 7
+    var stale = RuleSet.starter
+    stale.revision = 6
+    var newer = RuleSet.starter
+    newer.revision = 8
+
+    #expect(local.acceptingRemote(stale).revision == 7)
+    #expect(local.acceptingRemote(newer).revision == 8)
+}
+
 private func date(
     _ hour: Int,
     _ minute: Int = 0,

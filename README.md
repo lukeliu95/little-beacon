@@ -19,6 +19,7 @@
 - 本地执行、断网队列、30 天事件清理、钥匙串凭据。
 - Vercel Functions + Neon Postgres API、一次性配对码和家长/孩子分权。
 - 家长端每 30 秒获取状态、事件与申请。
+- 孩子端同样每 30 秒拉取最新规则；界面显示当前规则版本和最近同步时间，旧版本规则不会覆盖较新的本地规则。
 - Sparkle 安全更新：自动检查、手动检查、Ed25519 归档签名与 GitHub Releases 更新源。
 
 详细边界见 [产品简报](docs/PRODUCT-BRIEF.md)，领域词汇见 [CONTEXT.md](CONTEXT.md)，关键取舍见 [ADR](docs/adr)。

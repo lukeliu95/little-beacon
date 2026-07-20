@@ -30,6 +30,10 @@ let package = Package(
             name: "LittleBeaconCoreTests",
             dependencies: ["LittleBeaconCore"]
         ),
+        .testTarget(
+            name: "LittleBeaconAppTests",
+            dependencies: ["LittleBeaconApp", "LittleBeaconCore"]
+        ),
     ],
     swiftLanguageModes: [.v5]
 )

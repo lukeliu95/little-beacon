@@ -284,7 +284,7 @@ private struct ChildDashboardView: View {
                 }
                 .cardStyle()
 
-                ChildRuleSummary(rules: model.rules)
+                ChildRuleSummary(rules: model.rules, lastSyncAt: model.snapshot.lastRulesSyncAt)
                 SettingsView(model: model, compact: true)
             }
             .padding(28)
@@ -579,10 +579,17 @@ private struct SettingsView: View {
 
 private struct ChildRuleSummary: View {
     let rules: RuleSet
+    let lastSyncAt: Date?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("今天的规则").font(.title2.bold())
+            HStack {
+                Text("今天的规则").font(.title2.bold())
+                Spacer()
+                Text(syncText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             ForEach([ActivityCategory.game, .video]) { category in
                 HStack {
                     CategoryIcon(category: category)
@@ -593,6 +600,11 @@ private struct ChildRuleSummary: View {
             }
         }
         .cardStyle()
+    }
+
+    private var syncText: String {
+        guard let lastSyncAt else { return "本地规则 · 版本 \(rules.revision)" }
+        return "版本 \(rules.revision) · \(lastSyncAt.formatted(date: .omitted, time: .shortened)) 同步"
     }
 
     private func summary(for category: ActivityCategory) -> String {

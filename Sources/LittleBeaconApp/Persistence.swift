@@ -15,6 +15,7 @@ struct LocalSnapshot: Codable {
     var pendingEventIDs: Set<UUID> = []
     var currentStatus = DeviceStatus(category: .idle, lastSeenAt: .distantPast, isOnline: false)
     var monitoringEnabled = true
+    var lastRulesSyncAt: Date?
 
     mutating func prune(now: Date = Date()) {
         events.removeAll { $0.expiresAt <= now }

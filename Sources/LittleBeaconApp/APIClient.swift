@@ -57,10 +57,8 @@ struct APIClient {
         }
         self.baseURL = url
         self.token = token
-        encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        encoder = APIJSONCoding.makeEncoder()
+        decoder = APIJSONCoding.makeDecoder()
     }
 
     func bootstrap(setupKey: String, deviceName: String) async throws -> BootstrapResponse {
