@@ -160,6 +160,13 @@ private struct ParentOverviewView: View {
                 HStack(spacing: 16) {
                     StatusCard(status: model.currentStatus)
                     MetricCard(
+                        title: "今日已用",
+                        value: formatUsageDuration(model.currentStatus.dailyUsageSeconds),
+                        detail: model.currentStatus.isOnline ? "来自孩子 Mac 的最新同步" : "等待孩子 Mac 同步",
+                        icon: "hourglass",
+                        tint: .teal
+                    )
+                    MetricCard(
                         title: "近 30 天违规",
                         value: "\(model.events.count)",
                         detail: model.events.isEmpty ? "安安静静，挺好。" : "事件到期自动删除",
@@ -207,89 +214,168 @@ private struct ChildDashboardView: View {
     @State private var selectedDuration = 30
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("小灯塔正在工作")
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
-                        Text("看得见，也说得清。")
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    ConnectionBadge(text: model.connectionMessage)
-                }
-
-                if let warning = model.warningMessage {
-                    Label(warning, systemImage: "exclamationmark.triangle.fill")
-                        .font(.headline)
-                        .foregroundStyle(.orange)
-                        .padding(18)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
-                }
-
-                HStack(spacing: 16) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("当前前台活动")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        HStack(spacing: 12) {
-                            CategoryIcon(category: model.currentActivity.category)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(model.currentActivity.category.displayName)
-                                    .font(.title2.bold())
-                                Text(model.currentActivity.observation.appName.isEmpty
-                                     ? "没有检测到前台应用"
-                                     : model.currentActivity.observation.appName)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .cardStyle()
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("隐私边界")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Label("不截屏、不记按键", systemImage: "eye.slash")
-                        Label("只在违规时生成事件", systemImage: "list.bullet.rectangle")
-                        Label("事件 30 天后删除", systemImage: "calendar.badge.minus")
-                    }
-                    .cardStyle()
-                }
-
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("申请临时使用").font(.title2.bold())
+        ZStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
                     HStack {
-                        Picker("类别", selection: $selectedCategory) {
-                            Text("游戏").tag(ActivityCategory.game)
-                            Text("视频").tag(ActivityCategory.video)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("小灯塔正在工作")
+                                .font(.system(size: 30, weight: .bold, design: .rounded))
+                            Text("看得见，也说得清。")
+                                .foregroundStyle(.secondary)
                         }
-                        .pickerStyle(.segmented)
-                        Picker("时长", selection: $selectedDuration) {
-                            Text("15 分钟").tag(15)
-                            Text("30 分钟").tag(30)
-                            Text("60 分钟").tag(60)
-                        }
-                        .frame(width: 150)
-                        Button("发送申请") {
-                            model.requestTemporaryUse(category: selectedCategory, durationMinutes: selectedDuration)
-                        }
-                        .buttonStyle(.borderedProminent)
+                        Spacer()
+                        ConnectionBadge(text: model.connectionMessage)
                     }
-                    Text("家长批准后立即生效，到期自动恢复原来的每周时段。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                .cardStyle()
 
-                ChildRuleSummary(rules: model.rules, lastSyncAt: model.snapshot.lastRulesSyncAt)
-                SettingsView(model: model, compact: true)
+                    if let warning = model.warningMessage {
+                        Label(warning, systemImage: "exclamationmark.triangle.fill")
+                            .font(.headline)
+                            .foregroundStyle(.orange)
+                            .padding(18)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
+                    }
+
+                    HStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("当前前台活动")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            HStack(spacing: 12) {
+                                CategoryIcon(category: model.currentActivity.category)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(model.currentActivity.category.displayName)
+                                        .font(.title2.bold())
+                                    Text(model.currentActivity.observation.appName.isEmpty
+                                         ? "没有检测到前台应用"
+                                         : model.currentActivity.observation.appName)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Text("今日已用 \(formatUsageDuration(model.currentStatus.dailyUsageSeconds))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .cardStyle()
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("隐私边界")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Label("不截屏、不记按键", systemImage: "eye.slash")
+                            Label("只在违规时生成事件", systemImage: "list.bullet.rectangle")
+                            Label("事件 30 天后删除", systemImage: "calendar.badge.minus")
+                        }
+                        .cardStyle()
+                    }
+
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text("申请临时使用").font(.title2.bold())
+                        HStack {
+                            Picker("类别", selection: $selectedCategory) {
+                                Text("游戏").tag(ActivityCategory.game)
+                                Text("视频").tag(ActivityCategory.video)
+                            }
+                            .pickerStyle(.segmented)
+                            Picker("时长", selection: $selectedDuration) {
+                                Text("15 分钟").tag(15)
+                                Text("30 分钟").tag(30)
+                                Text("60 分钟").tag(60)
+                            }
+                            .frame(width: 150)
+                            Button("发送申请") {
+                                model.requestTemporaryUse(category: selectedCategory, durationMinutes: selectedDuration)
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                        Text("家长批准后立即生效，到期自动恢复原来的每周时段。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .cardStyle()
+
+                    ChildRuleSummary(rules: model.rules, lastSyncAt: model.snapshot.lastRulesSyncAt)
+
+                    if !model.hasRemoteConfiguration {
+                        ChildPairingForm(model: model)
+                    }
+                }
+                .padding(28)
             }
-            .padding(28)
+
+            if let alert = model.activeAlert {
+                ChildAlertOverlay(alert: alert) { model.activeAlert = nil }
+            }
         }
     }
+}
+
+private struct ChildPairingForm: View {
+    @ObservedObject var model: AppModel
+    @State private var baseURL = ""
+    @State private var pairCode = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("连接家长端").font(.title2.bold())
+            TextField("https://little-beacon-api.vercel.app", text: $baseURL)
+                .textFieldStyle(.roundedBorder)
+            TextField("6 位配对码", text: $pairCode)
+                .textFieldStyle(.roundedBorder)
+            Button("连接家长端") {
+                Task { await model.pairChild(baseURL: baseURL, code: pairCode) }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(baseURL.isEmpty || pairCode.count != 6 || model.isBusy)
+            Text(model.connectionMessage)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .cardStyle()
+        .onAppear { baseURL = model.snapshot.apiBaseURL }
+    }
+}
+
+private struct ChildAlertOverlay: View {
+    let alert: ChildAlert
+    let dismiss: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.35).ignoresSafeArea()
+            VStack(spacing: 20) {
+                Image(systemName: icon)
+                    .font(.system(size: 46))
+                    .foregroundStyle(tint)
+                Text(alert.title).font(.title.bold())
+                Text(alert.message)
+                    .font(.title3)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                Button("知道了") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+            }
+            .padding(40)
+            .frame(maxWidth: 420)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
+            .shadow(radius: 30)
+        }
+    }
+
+    private var icon: String {
+        alert.tone == .gentle ? "eye" : "exclamationmark.triangle.fill"
+    }
+    private var tint: Color {
+        alert.tone == .gentle ? .teal : .orange
+    }
+}
+
+private func formatUsageDuration(_ seconds: Int) -> String {
+    let hours = seconds / 3_600
+    let minutes = (seconds % 3_600) / 60
+    return hours > 0 ? "\(hours) 小时 \(minutes) 分" : "\(minutes) 分"
 }
 
 private struct RulesView: View {
@@ -492,61 +578,81 @@ private struct RequestsView: View {
 private struct SettingsView: View {
     @ObservedObject var model: AppModel
     @EnvironmentObject private var updates: UpdateController
-    var compact = false
     @State private var baseURL = ""
     @State private var setupKey = ""
-    @State private var pairCode = ""
     @State private var overrideTarget: OverrideTarget = .domain
 
+    // `SettingsView` is only ever shown inside `ParentShellView`'s "设置" tab (see `RootView`'s
+    // role switch) — the child dashboard now has its own minimal `ChildPairingForm` instead. So
+    // this is unconditionally the parent's connection/device management, not role-branched.
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                if !compact {
-                    PageHeader(title: "连接与设备", subtitle: "远程数据库只藏在 API 后面，客户端不碰数据库密码。")
-                } else {
-                    Text("连接设置").font(.title2.bold())
-                }
+                PageHeader(title: "连接与设备", subtitle: "远程数据库只藏在 API 后面，客户端不碰数据库密码。")
                 VStack(alignment: .leading, spacing: 12) {
                     TextField("https://little-beacon-api.vercel.app", text: $baseURL)
                         .textFieldStyle(.roundedBorder)
-                    if model.role == .parent {
-                        SecureField("首次部署密钥", text: $setupKey)
-                            .textFieldStyle(.roundedBorder)
-                        HStack {
-                            Button("建立家长端") {
-                                Task { await model.bootstrapParent(baseURL: baseURL, setupKey: setupKey) }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(baseURL.isEmpty || setupKey.isEmpty || model.isBusy)
-                            Button("生成配对码") { Task { await model.generatePairingCode() } }
-                                .disabled(!model.hasRemoteConfiguration || model.isBusy)
-                        }
-                        if let code = model.pairingCode {
-                            HStack {
-                                Text(code)
-                                    .font(.system(size: 30, weight: .bold, design: .monospaced))
-                                if let expires = model.pairingCodeExpiresAt {
-                                    Text("有效至 \(expires.formatted(date: .omitted, time: .shortened))")
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .padding(12)
-                            .background(Color.indigo.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
-                        }
-                    } else {
-                        TextField("6 位配对码", text: $pairCode)
-                            .textFieldStyle(.roundedBorder)
-                        Button("连接家长端") {
-                            Task { await model.pairChild(baseURL: baseURL, code: pairCode) }
+                    SecureField("首次部署密钥", text: $setupKey)
+                        .textFieldStyle(.roundedBorder)
+                    HStack {
+                        Button("建立家长端") {
+                            Task { await model.bootstrapParent(baseURL: baseURL, setupKey: setupKey) }
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(baseURL.isEmpty || pairCode.count != 6 || model.isBusy)
+                        .disabled(baseURL.isEmpty || setupKey.isEmpty || model.isBusy)
+                        Button("生成配对码") { Task { await model.generatePairingCode() } }
+                            .disabled(!model.hasRemoteConfiguration || model.isBusy)
+                    }
+                    if let code = model.pairingCode {
+                        HStack {
+                            Text(code)
+                                .font(.system(size: 30, weight: .bold, design: .monospaced))
+                            if let expires = model.pairingCodeExpiresAt {
+                                Text("有效至 \(expires.formatted(date: .omitted, time: .shortened))")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(12)
+                        .background(Color.indigo.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
                     }
                     Label(model.connectionMessage, systemImage: model.hasRemoteConfiguration ? "checkmark.circle" : "network.slash")
                         .foregroundStyle(.secondary)
                     Text(model.autoStartMessage)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+                .cardStyle()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("孩子端提醒").font(.headline)
+                    Toggle("25 分钟护眼休息提醒（默认开启）", isOn: Binding(
+                        get: { model.rules.pomodoroEnabled },
+                        set: { model.setPomodoroEnabled($0) }
+                    ))
+                    Text("到点弹出温和提示，不锁屏、不阻止操作，孩子一键即可关闭。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Divider()
+                    Toggle("每日使用提醒", isOn: Binding(
+                        get: { model.rules.dailyUsageThresholdSeconds != nil },
+                        set: { enabled in
+                            model.setDailyUsageThresholdSeconds(enabled ? (model.rules.dailyUsageThresholdSeconds ?? 7_200) : nil)
+                        }
+                    ))
+                    if let threshold = model.rules.dailyUsageThresholdSeconds {
+                        Stepper(
+                            "每天用机超过 \(formatUsageDuration(threshold)) 后提醒",
+                            value: Binding(
+                                get: { threshold / 60 },
+                                set: { model.setDailyUsageThresholdSeconds($0 * 60) }
+                            ),
+                            in: 30...720,
+                            step: 30
+                        )
+                        Text("只提醒，不会结束程序，也不计入违规。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .cardStyle()
 
@@ -570,9 +676,9 @@ private struct SettingsView: View {
                     model.resetConfiguration()
                 }
             }
-            .padding(compact ? 0 : 28)
+            .padding(28)
         }
-        .navigationTitle(compact ? "" : "设置")
+        .navigationTitle("设置")
         .onAppear { baseURL = model.snapshot.apiBaseURL }
     }
 }

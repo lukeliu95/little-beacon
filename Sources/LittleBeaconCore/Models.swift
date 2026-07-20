@@ -83,17 +83,42 @@ public struct RuleSet: Codable, Equatable, Sendable {
     public var timeZoneIdentifier: String
     public var activityRules: [ActivityRule]
     public var overrides: [ClassificationOverride]
+    /// 25-minute eye-care break reminder, independent of the game/video rule engine. On by default.
+    public var pomodoroEnabled: Bool
+    /// Soft daily-usage nudge threshold in seconds. `nil` disables the nudge; this never enforces or ends activity.
+    public var dailyUsageThresholdSeconds: Int?
 
     public init(
         revision: Int = 1,
         timeZoneIdentifier: String = TimeZone.current.identifier,
         activityRules: [ActivityRule],
-        overrides: [ClassificationOverride] = []
+        overrides: [ClassificationOverride] = [],
+        pomodoroEnabled: Bool = true,
+        dailyUsageThresholdSeconds: Int? = 7200
     ) {
         self.revision = revision
         self.timeZoneIdentifier = timeZoneIdentifier
         self.activityRules = activityRules
         self.overrides = overrides
+        self.pomodoroEnabled = pomodoroEnabled
+        self.dailyUsageThresholdSeconds = dailyUsageThresholdSeconds
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case revision, timeZoneIdentifier, activityRules, overrides
+        case pomodoroEnabled, dailyUsageThresholdSeconds
+    }
+
+    // Custom decoding keeps old saved/remote documents (missing the two newest keys) loadable
+    // instead of throwing keyNotFound, since Swift's synthesized Decodable ignores default values.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        revision = try container.decode(Int.self, forKey: .revision)
+        timeZoneIdentifier = try container.decode(String.self, forKey: .timeZoneIdentifier)
+        activityRules = try container.decode([ActivityRule].self, forKey: .activityRules)
+        overrides = try container.decode([ClassificationOverride].self, forKey: .overrides)
+        pomodoroEnabled = try container.decodeIfPresent(Bool.self, forKey: .pomodoroEnabled) ?? true
+        dailyUsageThresholdSeconds = try container.decodeIfPresent(Int.self, forKey: .dailyUsageThresholdSeconds) ?? 7200
     }
 
     public static var starter: RuleSet {
@@ -180,11 +205,32 @@ public struct DeviceStatus: Codable, Equatable, Sendable {
     public var category: ActivityCategory
     public var lastSeenAt: Date
     public var isOnline: Bool
+    /// Total non-idle screen time accumulated for the current local calendar day, all categories combined.
+    public var dailyUsageSeconds: Int
 
-    public init(category: ActivityCategory, lastSeenAt: Date, isOnline: Bool = true) {
+    public init(
+        category: ActivityCategory,
+        lastSeenAt: Date,
+        isOnline: Bool = true,
+        dailyUsageSeconds: Int = 0
+    ) {
         self.category = category
         self.lastSeenAt = lastSeenAt
         self.isOnline = isOnline
+        self.dailyUsageSeconds = dailyUsageSeconds
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case category, lastSeenAt, isOnline, dailyUsageSeconds
+    }
+
+    // Custom decoding: old saved state / old sync payloads won't have dailyUsageSeconds.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        category = try container.decode(ActivityCategory.self, forKey: .category)
+        lastSeenAt = try container.decode(Date.self, forKey: .lastSeenAt)
+        isOnline = try container.decode(Bool.self, forKey: .isOnline)
+        dailyUsageSeconds = try container.decodeIfPresent(Int.self, forKey: .dailyUsageSeconds) ?? 0
     }
 }
 

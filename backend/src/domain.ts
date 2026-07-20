@@ -65,6 +65,10 @@ export function defaultRules() {
       },
     ],
     overrides: [],
+    // 25-minute eye-care break reminder, on by default; and a soft (notify-only) daily-usage
+    // nudge threshold. Both are independent of the game/video rule engine above.
+    pomodoroEnabled: true,
+    dailyUsageThresholdSeconds: 7_200,
   };
 }
 
@@ -73,6 +77,16 @@ export function validateRuleSet(value: unknown): value is Record<string, unknown
   const rules = value as Record<string, unknown>;
   if (!Number.isInteger(rules.revision) || typeof rules.timeZoneIdentifier !== "string") return false;
   if (!Array.isArray(rules.activityRules) || !Array.isArray(rules.overrides)) return false;
+  // Both fields are optional for backward compatibility with documents saved before they
+  // existed; when present, they must have the right shape.
+  if (rules.pomodoroEnabled !== undefined && typeof rules.pomodoroEnabled !== "boolean") return false;
+  if (
+    rules.dailyUsageThresholdSeconds !== undefined
+    && rules.dailyUsageThresholdSeconds !== null
+    && !(Number.isInteger(rules.dailyUsageThresholdSeconds) && Number(rules.dailyUsageThresholdSeconds) >= 0)
+  ) {
+    return false;
+  }
   return rules.activityRules.every((rule) => {
     if (!rule || typeof rule !== "object") return false;
     const candidate = rule as Record<string, unknown>;

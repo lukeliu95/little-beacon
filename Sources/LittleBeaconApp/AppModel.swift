@@ -3,11 +3,29 @@ import Combine
 import Foundation
 import LittleBeaconCore
 
+/// A dismissible, on-screen alert shown to the child — for rule warnings/enforcement, the
+/// 25-minute break reminder, and the soft daily-usage nudge. Distinct from `warningMessage`,
+/// which stays as a small inline banner that other code (the menu bar) already reads.
+struct ChildAlert: Identifiable, Equatable {
+    enum Tone: Equatable {
+        /// Rule violation warnings and enforcement — the child is doing something not allowed.
+        case warning
+        /// Break reminders and usage nudges — informational, not scary.
+        case gentle
+    }
+
+    let id = UUID()
+    let title: String
+    let message: String
+    let tone: Tone
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var snapshot: LocalSnapshot
     @Published private(set) var currentActivity = ClassifiedActivity(observation: .idle, category: .idle)
     @Published var warningMessage: String?
+    @Published var activeAlert: ChildAlert?
     @Published var connectionMessage = "本地模式"
     @Published var pairingCode: String?
     @Published var pairingCodeExpiresAt: Date?
@@ -20,6 +38,7 @@ final class AppModel: ObservableObject {
     private let evaluator = RuleEvaluator()
     private let activityMonitor = ActivityMonitor()
     private var violationMachine = ViolationMachine()
+    private var pomodoroTimer = PomodoroTimer()
     private var monitorTimer: Timer?
     private var syncTimer: Timer?
     private var activeEventID: UUID?
@@ -57,7 +76,9 @@ final class AppModel: ObservableObject {
         KeychainStore.delete(role: snapshot.role)
         snapshot = LocalSnapshot()
         violationMachine = ViolationMachine()
+        pomodoroTimer = PomodoroTimer()
         warningMessage = nil
+        activeAlert = nil
         connectionMessage = "本地模式"
         pairingCode = nil
         persist()
@@ -199,6 +220,22 @@ final class AppModel: ObservableObject {
         Task { await uploadRulesIfPossible(rulesToUpload) }
     }
 
+    func setPomodoroEnabled(_ enabled: Bool) {
+        snapshot.rules.pomodoroEnabled = enabled
+        snapshot.rules.revision += 1
+        persist()
+        let rulesToUpload = snapshot.rules
+        Task { await uploadRulesIfPossible(rulesToUpload) }
+    }
+
+    func setDailyUsageThresholdSeconds(_ seconds: Int?) {
+        snapshot.rules.dailyUsageThresholdSeconds = seconds
+        snapshot.rules.revision += 1
+        persist()
+        let rulesToUpload = snapshot.rules
+        Task { await uploadRulesIfPossible(rulesToUpload) }
+    }
+
     func requestTemporaryUse(category: ActivityCategory, durationMinutes: Int) {
         guard [15, 30, 60].contains(durationMinutes) else { return }
         let request = TemporaryRequest(category: category, durationMinutes: durationMinutes)
@@ -282,7 +319,21 @@ final class AppModel: ObservableObject {
         let observation = activityMonitor.observeFrontmostActivity()
         let activity = classifier.classify(observation, overrides: snapshot.rules.overrides)
         currentActivity = activity
-        snapshot.currentStatus = DeviceStatus(category: activity.category, lastSeenAt: now, isOnline: true)
+        let isIdle = activity.category == .idle
+
+        let previousDayKey = snapshot.dailyUsage.dayKey
+        snapshot.dailyUsage.advance(isIdle: isIdle, elapsedSeconds: delta, at: now)
+        if snapshot.dailyUsage.dayKey != previousDayKey {
+            snapshot.dailyUsageNudgeShown = false
+        }
+
+        snapshot.currentStatus = DeviceStatus(
+            category: activity.category,
+            lastSeenAt: now,
+            isOnline: true,
+            dailyUsageSeconds: snapshot.dailyUsage.activeSeconds
+        )
+
         let allowed = evaluator.isAllowed(
             category: activity.category,
             at: now,
@@ -296,9 +347,35 @@ final class AppModel: ObservableObject {
             at: now
         )
         process(actions: actions, now: now)
+
+        if snapshot.rules.pomodoroEnabled,
+           pomodoroTimer.advance(isIdle: isIdle, elapsedSeconds: delta) == .breakSuggested {
+            presentAlert(
+                title: "休息一下",
+                message: "已经连续用了 25 分钟，起来看看远处，休息一下眼睛吧。",
+                tone: .gentle
+            )
+        }
+
+        if !snapshot.dailyUsageNudgeShown,
+           let threshold = snapshot.rules.dailyUsageThresholdSeconds,
+           snapshot.dailyUsage.activeSeconds >= threshold {
+            snapshot.dailyUsageNudgeShown = true
+            presentAlert(
+                title: "今日用机提醒",
+                message: "今天已经用了很久电脑了，家长已经看到了。",
+                tone: .gentle
+            )
+        }
+
         updateActiveEvent()
         snapshot.prune(now: now)
         persist()
+    }
+
+    private func presentAlert(title: String, message: String, tone: ChildAlert.Tone) {
+        activeAlert = ChildAlert(title: title, message: message, tone: tone)
+        SoundService.playAlert()
     }
 
     private func process(actions: [ViolationAction], now: Date) {
@@ -313,6 +390,7 @@ final class AppModel: ObservableObject {
                 }
                 warningMessage = message
                 NotificationService.post(title: "小灯塔提醒", body: message, identifier: "warning-\(level)")
+                presentAlert(title: "小灯塔提醒", message: message, tone: .warning)
             case let .beginEvent(activity, startedAt):
                 let event = ViolationEvent(
                     category: activity.category,
@@ -325,7 +403,9 @@ final class AppModel: ObservableObject {
                 snapshot.pendingEventIDs.insert(event.id)
             case let .enforce(activity):
                 let succeeded = activityMonitor.enforce(activity)
-                warningMessage = succeeded ? "已结束当前违规活动。" : "无法自动结束活动，请联系家长检查权限。"
+                let message = succeeded ? "已结束当前违规活动。" : "无法自动结束活动，请联系家长检查权限。"
+                warningMessage = message
+                presentAlert(title: succeeded ? "已结束当前活动" : "需要家长帮助", message: message, tone: .warning)
                 if let id = activeEventID,
                    let index = snapshot.events.firstIndex(where: { $0.id == id }) {
                     snapshot.events[index].wasEnforced = succeeded

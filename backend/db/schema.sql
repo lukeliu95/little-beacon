@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS device_status (
   last_seen_at timestamptz NOT NULL
 );
 
+-- Added for the daily-usage feature; must be applied manually against the production Neon database.
+ALTER TABLE device_status ADD COLUMN IF NOT EXISTS daily_usage_seconds integer NOT NULL DEFAULT 0;
+
 CREATE TABLE IF NOT EXISTS violation_events (
   id uuid PRIMARY KEY,
   household_id uuid NOT NULL REFERENCES households(id) ON DELETE CASCADE,

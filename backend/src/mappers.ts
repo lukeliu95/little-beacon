@@ -7,6 +7,7 @@ export function mapStatus(row: Record<string, unknown> | undefined) {
     category: row.category,
     lastSeenAt: lastSeenAt.toISOString(),
     isOnline: Date.now() - lastSeenAt.getTime() <= 90_000,
+    dailyUsageSeconds: Number(row.daily_usage_seconds ?? 0),
   };
 }
 
