@@ -2,45 +2,45 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>zh_CN</string>
-    <key>CFBundleDisplayName</key>
-    <string>小灯塔</string>
-    <key>CFBundleExecutable</key>
-    <string>LittleBeacon</string>
-    <key>CFBundleIdentifier</key>
-    <string>app.littlebeacon.mac</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon.icns</string>
-    <key>CFBundleName</key>
-    <string>小灯塔</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.2.1</string>
-    <key>CFBundleVersion</key>
-    <string>2001</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <key>LSMultipleInstancesProhibited</key>
-    <true/>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>小灯塔只读取 Safari 或 Chrome 当前标签页的域名，用于判断是否属于视频站点；不会保存完整网址、标题或浏览历史。</string>
-    <key>NSHumanReadableCopyright</key>
-    <string>Copyright © 2026 lukeliu95. MIT License.</string>
-    <key>NSSupportsAutomaticTermination</key>
-    <false/>
-    <key>SUFeedURL</key>
-    <string>https://github.com/lukeliu95/little-beacon/releases/latest/download/appcast.xml</string>
-    <key>SUPublicEDKey</key>
-    <string>H/OFE6GnGZxwODNjd/7DKxAdfnHQm2Y5X6pQQgFbAKU=</string>
-    <key>SUEnableAutomaticChecks</key>
-    <true/>
-    <key>SUAllowsAutomaticUpdates</key>
-    <true/>
-    <key>SUVerifyUpdateBeforeExtraction</key>
-    <true/>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>小灯塔</string>
+	<key>CFBundleExecutable</key>
+	<string>LittleBeacon</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon.icns</string>
+	<key>CFBundleIdentifier</key>
+	<string>app.littlebeacon.mac</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>小灯塔</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.3.0</string>
+	<key>CFBundleVersion</key>
+	<string>3000</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSMultipleInstancesProhibited</key>
+	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>小灯塔只读取 Safari 或 Chrome 当前标签页的域名，用于判断是否属于视频站点；不会保存完整网址、标题或浏览历史。</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 lukeliu95. MIT License.</string>
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<key>SUAllowsAutomaticUpdates</key>
+	<true/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/lukeliu95/little-beacon/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>H/OFE6GnGZxwODNjd/7DKxAdfnHQm2Y5X6pQQgFbAKU=</string>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 </dict>
 </plist>
