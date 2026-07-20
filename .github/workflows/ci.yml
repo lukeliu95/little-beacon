@@ -1,0 +1,25 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install backend dependencies
+        run: npm ci --prefix backend
+      - name: Run checks
+        run: ./scripts/run-checks.sh
+      - name: Package macOS app
+        run: ./scripts/package-app.sh
+      - name: Upload test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: LittleBeacon-${{ github.sha }}
+          path: outputs/LittleBeacon-macOS.zip
+          if-no-files-found: error
+          retention-days: 14

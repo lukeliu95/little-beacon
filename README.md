@@ -19,6 +19,7 @@
 - 本地执行、断网队列、30 天事件清理、钥匙串凭据。
 - Vercel Functions + Neon Postgres API、一次性配对码和家长/孩子分权。
 - 家长端每 30 秒获取状态、事件与申请。
+- Sparkle 安全更新：自动检查、手动检查、Ed25519 归档签名与 GitHub Releases 更新源。
 
 详细边界见 [产品简报](docs/PRODUCT-BRIEF.md)，领域词汇见 [CONTEXT.md](CONTEXT.md)，关键取舍见 [ADR](docs/adr)。
 
@@ -36,6 +37,23 @@
 ```
 
 产物位于 `outputs/小灯塔.app` 和 `outputs/LittleBeacon-macOS.zip`。当前使用 ad-hoc 签名，适合家庭内手动测试；公开分发前仍需 Apple Developer ID 签名与公证。
+
+## 在线更新与 GitHub 打包
+
+从 `0.2.0` 开始，小灯塔内置 Sparkle。设置页或应用菜单可以手动检查更新，应用也会定期检查 GitHub Releases。更新压缩包使用独立 Ed25519 私钥签名，客户端内只保存公钥；数据库密钥、Vercel 密钥和更新私钥都不会进入仓库。
+
+- 推送到 `main`：`.github/workflows/ci.yml` 自动测试、打包并保留 14 天构建产物。
+- 推送 `v*` 标签：`.github/workflows/release.yml` 自动测试并保留一份标签构建产物，用来核对 GitHub 环境也能正常打包。
+- 正式在线更新：由 `scripts/publish-release.sh` 使用这台 Mac 钥匙串里的签名私钥，生成已签名压缩包和 `appcast.xml`，再创建 GitHub Release。私钥不会上传到 GitHub Actions。
+- 更新源：`https://github.com/lukeliu95/little-beacon/releases/latest/download/appcast.xml`。
+
+发布下一版只需要保证版本标签递增：
+
+```bash
+./scripts/publish-release.sh 0.2.1
+```
+
+发布前先把 `packaging/Info.plist` 的短版本改为 `0.2.1`，构建号按 `主版本 × 1000000 + 次版本 × 1000 + 修订号` 递增，并提交到 `main`。首次启用在线更新的 `0.2.0` 仍需在两台 Mac 各手动安装一次；以后才由应用自己接班。这个“第一次还得走过去一下”的尴尬，属于时间机器尚未完工，不属于程序偷懒。
 
 ## 首次安装
 

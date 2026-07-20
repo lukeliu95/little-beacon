@@ -491,6 +491,7 @@ private struct RequestsView: View {
 
 private struct SettingsView: View {
     @ObservedObject var model: AppModel
+    @EnvironmentObject private var updates: UpdateController
     var compact = false
     @State private var baseURL = ""
     @State private var setupKey = ""
@@ -546,6 +547,18 @@ private struct SettingsView: View {
                     Text(model.autoStartMessage)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+                .cardStyle()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("软件更新").font(.headline)
+                    Text("当前版本：\(updates.currentVersion)")
+                        .foregroundStyle(.secondary)
+                    Text("小灯塔会定期检查 GitHub Releases；更新包通过独立签名验证后才会安装。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Button("检查更新…") { updates.checkForUpdates() }
+                        .disabled(!updates.canCheckForUpdates)
                 }
                 .cardStyle()
 

@@ -4,12 +4,20 @@ import LittleBeaconCore
 @main
 struct LittleBeaconApp: App {
     @StateObject private var model = AppModel()
+    @StateObject private var updates = UpdateController()
 
     var body: some Scene {
         WindowGroup("小灯塔") {
             RootView(model: model)
+                .environmentObject(updates)
         }
         .defaultSize(width: 980, height: 700)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("检查更新…") { updates.checkForUpdates() }
+                    .disabled(!updates.canCheckForUpdates)
+            }
+        }
 
         MenuBarExtra("小灯塔", systemImage: "light.beacon.max.fill") {
             VStack(alignment: .leading, spacing: 10) {
@@ -27,6 +35,8 @@ struct LittleBeaconApp: App {
                 }
                 Divider()
                 Button("立即同步") { Task { await model.syncNow() } }
+                Button("检查更新…") { updates.checkForUpdates() }
+                    .disabled(!updates.canCheckForUpdates)
             }
             .padding(10)
             .frame(width: 280)

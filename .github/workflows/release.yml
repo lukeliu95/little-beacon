@@ -1,0 +1,31 @@
+name: Tag Build
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  verify-tag:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          IFS=. read -r MAJOR MINOR PATCH <<< "$VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$((MAJOR * 1000000 + MINOR * 1000 + PATCH))" >> "$GITHUB_ENV"
+      - name: Install backend dependencies
+        run: npm ci --prefix backend
+      - name: Run checks
+        run: ./scripts/run-checks.sh
+      - name: Package versioned app
+        run: LITTLE_BEACON_VERSION="$VERSION" LITTLE_BEACON_BUILD="$BUILD_NUMBER" ./scripts/package-app.sh
+      - name: Upload tag build for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: LittleBeacon-${{ github.ref_name }}-unsigned-update
+          path: outputs/LittleBeacon-macOS.zip
+          if-no-files-found: error
+          retention-days: 30

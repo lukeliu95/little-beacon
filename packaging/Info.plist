@@ -19,9 +19,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>0.2.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2000</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>LSMultipleInstancesProhibited</key>
@@ -32,5 +32,15 @@
     <string>Copyright © 2026 lukeliu95. MIT License.</string>
     <key>NSSupportsAutomaticTermination</key>
     <false/>
+    <key>SUFeedURL</key>
+    <string>https://github.com/lukeliu95/little-beacon/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>H/OFE6GnGZxwODNjd/7DKxAdfnHQm2Y5X6pQQgFbAKU=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUAllowsAutomaticUpdates</key>
+    <true/>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>
 </dict>
 </plist>
