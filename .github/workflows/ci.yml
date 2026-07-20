@@ -9,7 +9,7 @@ jobs:
   verify:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install backend dependencies
         run: npm ci --prefix backend
       - name: Run checks
@@ -17,7 +17,7 @@ jobs:
       - name: Package macOS app
         run: ./scripts/package-app.sh
       - name: Upload test package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: LittleBeacon-${{ github.sha }}
           path: outputs/LittleBeacon-macOS.zip

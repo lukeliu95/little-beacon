@@ -9,7 +9,7 @@ jobs:
   verify-tag:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Read version
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -23,7 +23,7 @@ jobs:
       - name: Package versioned app
         run: LITTLE_BEACON_VERSION="$VERSION" LITTLE_BEACON_BUILD="$BUILD_NUMBER" ./scripts/package-app.sh
       - name: Upload tag build for inspection
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: LittleBeacon-${{ github.ref_name }}-unsigned-update
           path: outputs/LittleBeacon-macOS.zip
