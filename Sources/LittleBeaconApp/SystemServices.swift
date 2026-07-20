@@ -1,6 +1,21 @@
+import AppKit
 import Foundation
 import ServiceManagement
 import UserNotifications
+
+enum SoundService {
+    /// Plays an attention-getting sound for on-screen alerts (warnings, break reminders,
+    /// daily-usage nudges). Additive to `NotificationService.post`, which already plays the
+    /// default notification sound but is easy to miss when the app isn't focused.
+    static func playAlert() {
+        let sound = NSSound(named: "Sosumi") ?? NSSound(named: "Glass")
+        if let sound {
+            sound.play()
+        } else {
+            NSSound.beep()
+        }
+    }
+}
 
 enum NotificationService {
     static func requestAuthorization() {

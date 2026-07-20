@@ -10,7 +10,7 @@ async function handler(request: Request): Promise<Response> {
     await cleanupExpired(sql);
     const [ruleResult, statusResult, eventResult, requestResult] = await Promise.all([
       sql`SELECT document FROM rules WHERE household_id = ${credential.householdID} LIMIT 1`,
-      sql`SELECT category, last_seen_at FROM device_status
+      sql`SELECT category, last_seen_at, daily_usage_seconds FROM device_status
         WHERE household_id = ${credential.householdID} ORDER BY last_seen_at DESC LIMIT 1`,
       sql`SELECT * FROM violation_events WHERE household_id = ${credential.householdID}
         ORDER BY started_at DESC LIMIT 500`,

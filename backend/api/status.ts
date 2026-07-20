@@ -13,11 +13,14 @@ async function handler(request: Request): Promise<Response> {
     }
     const seenAt = new Date(body.lastSeenAt);
     if (Number.isNaN(seenAt.getTime())) throw new HttpError(400, "同步时间无效");
+    // Optional for backward compatibility with older clients that don't send it yet.
+    const dailyUsageSeconds = Number.isInteger(body.dailyUsageSeconds) ? Number(body.dailyUsageSeconds) : 0;
     const sql = database();
-    await sql`INSERT INTO device_status (device_id, household_id, category, last_seen_at)
-      VALUES (${credential.deviceID}, ${credential.householdID}, ${body.category}, ${seenAt.toISOString()})
+    await sql`INSERT INTO device_status (device_id, household_id, category, last_seen_at, daily_usage_seconds)
+      VALUES (${credential.deviceID}, ${credential.householdID}, ${body.category}, ${seenAt.toISOString()}, ${dailyUsageSeconds})
       ON CONFLICT (device_id) DO UPDATE
-      SET category = EXCLUDED.category, last_seen_at = EXCLUDED.last_seen_at`;
+      SET category = EXCLUDED.category, last_seen_at = EXCLUDED.last_seen_at,
+        daily_usage_seconds = EXCLUDED.daily_usage_seconds`;
     return json({ ok: true });
   } catch (error) {
     return errorResponse(error);

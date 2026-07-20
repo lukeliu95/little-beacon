@@ -16,6 +16,38 @@ struct LocalSnapshot: Codable {
     var currentStatus = DeviceStatus(category: .idle, lastSeenAt: .distantPast, isOnline: false)
     var monitoringEnabled = true
     var lastRulesSyncAt: Date?
+    var dailyUsage = DailyUsageTracker()
+    var dailyUsageNudgeShown = false
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case role, deviceName, apiBaseURL, householdID, deviceID, rules, temporaryGrants
+        case requests, events, pendingEventIDs, currentStatus, monitoringEnabled, lastRulesSyncAt
+        case dailyUsage, dailyUsageNudgeShown
+    }
+
+    // Custom decoding: a real family's existing state.json predates dailyUsage/dailyUsageNudgeShown.
+    // Swift's synthesized Decodable throws keyNotFound for a missing key even when the property
+    // has a default value, so every new field here is decoded with decodeIfPresent(...) ?? default.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        role = try container.decode(DeviceRole.self, forKey: .role)
+        deviceName = try container.decode(String.self, forKey: .deviceName)
+        apiBaseURL = try container.decode(String.self, forKey: .apiBaseURL)
+        householdID = try container.decodeIfPresent(String.self, forKey: .householdID)
+        deviceID = try container.decodeIfPresent(String.self, forKey: .deviceID)
+        rules = try container.decode(RuleSet.self, forKey: .rules)
+        temporaryGrants = try container.decode([TemporaryGrant].self, forKey: .temporaryGrants)
+        requests = try container.decode([TemporaryRequest].self, forKey: .requests)
+        events = try container.decode([ViolationEvent].self, forKey: .events)
+        pendingEventIDs = try container.decode(Set<UUID>.self, forKey: .pendingEventIDs)
+        currentStatus = try container.decode(DeviceStatus.self, forKey: .currentStatus)
+        monitoringEnabled = try container.decode(Bool.self, forKey: .monitoringEnabled)
+        lastRulesSyncAt = try container.decodeIfPresent(Date.self, forKey: .lastRulesSyncAt)
+        dailyUsage = try container.decodeIfPresent(DailyUsageTracker.self, forKey: .dailyUsage) ?? DailyUsageTracker()
+        dailyUsageNudgeShown = try container.decodeIfPresent(Bool.self, forKey: .dailyUsageNudgeShown) ?? false
+    }
 
     mutating func prune(now: Date = Date()) {
         events.removeAll { $0.expiresAt <= now }
