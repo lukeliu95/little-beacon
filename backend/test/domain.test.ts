@@ -7,6 +7,7 @@ import {
   hashPairingCode,
   hashToken,
   isAllowedDuration,
+  parseRequestStartsAt,
   secureStringEqual,
   shouldAcceptRuleRevision,
   validateRuleSet,
@@ -39,6 +40,28 @@ test("temporary durations stay on the agreed presets", () => {
   assert.equal(isAllowedDuration(30), true);
   assert.equal(isAllowedDuration(60), true);
   assert.equal(isAllowedDuration(999), false);
+});
+
+test("scheduled request start times accept valid ISO dates in the allowed window", () => {
+  const now = new Date("2026-07-21T12:00:00Z");
+  const parsed = parseRequestStartsAt("2026-07-22T16:00:00Z", now);
+  assert.ok(parsed instanceof Date);
+  assert.equal(parsed.toISOString(), "2026-07-22T16:00:00.000Z");
+  // Slightly in the past (clock skew) is still fine, up to 24 hours.
+  assert.ok(parseRequestStartsAt("2026-07-21T11:00:00Z", now) instanceof Date);
+});
+
+test("absent start times keep old clients working and mean start immediately", () => {
+  assert.equal(parseRequestStartsAt(undefined), null);
+  assert.equal(parseRequestStartsAt(null), null);
+});
+
+test("garbage or out-of-range start times are rejected", () => {
+  const now = new Date("2026-07-21T12:00:00Z");
+  assert.equal(parseRequestStartsAt("not-a-date", now), "invalid");
+  assert.equal(parseRequestStartsAt(1_753_099_200_000, now), "invalid");
+  assert.equal(parseRequestStartsAt("2026-08-04T12:00:01Z", now), "invalid"); // > 14 days ahead
+  assert.equal(parseRequestStartsAt("2026-07-20T11:59:59Z", now), "invalid"); // > 24 hours past
 });
 
 test("starter rules pass validation and malformed windows do not", () => {

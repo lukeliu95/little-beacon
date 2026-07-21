@@ -79,6 +79,10 @@ CREATE TABLE IF NOT EXISTS temporary_requests (
   resolved_at timestamptz
 );
 
+-- Added for scheduled temporary requests (NULL = start immediately on approval);
+-- must be applied manually against the production Neon database.
+ALTER TABLE temporary_requests ADD COLUMN IF NOT EXISTS starts_at timestamptz;
+
 CREATE TABLE IF NOT EXISTS temporary_grants (
   id uuid PRIMARY KEY,
   request_id uuid NOT NULL UNIQUE REFERENCES temporary_requests(id) ON DELETE CASCADE,

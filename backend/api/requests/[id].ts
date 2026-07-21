@@ -23,7 +23,9 @@ async function handler(request: Request): Promise<Response> {
     if (!body.approved) return json({ grant: null });
 
     const grantID = randomUUID();
-    const startsAt = new Date();
+    // A scheduled request grants its requested window (even if it has already passed —
+    // the parent saw the window when approving); an immediate one starts now.
+    const startsAt = item.starts_at ? new Date(String(item.starts_at)) : new Date();
     const endsAt = new Date(startsAt.getTime() + Number(item.duration_minutes) * 60_000);
     const grants = rows(await sql`INSERT INTO temporary_grants (
       id, request_id, household_id, device_id, category, starts_at, ends_at
