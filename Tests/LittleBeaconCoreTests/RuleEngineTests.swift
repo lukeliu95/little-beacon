@@ -45,6 +45,17 @@ private func date(
     #expect(classifier.classify(youtube, overrides: [override]).category == .other)
 }
 
+@Test func classifierRecognizesRobloxClientAsGame() {
+    let classifier = ActivityClassifier()
+    // Real-world bundle ID of /Applications/Roblox.app — mixed case on disk,
+    // must classify as game via the lowercased comparison.
+    let roblox = ActivityObservation(
+        appName: "Roblox",
+        bundleIdentifier: "com.roblox.RobloxPlayer"
+    )
+    #expect(classifier.classify(roblox, overrides: []).category == .game)
+}
+
 @Test func evaluatorHonorsWeeklyWindowAndTemporaryGrant() {
     let rules = RuleSet(
         timeZoneIdentifier: "Asia/Tokyo",

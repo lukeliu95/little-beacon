@@ -8,6 +8,10 @@ public struct ActivityClassifier: Sendable {
         "com.mojang.minecraftlauncher",
         "com.riotgames.leagueoflegends",
         "com.roblox.roblox",
+        // The actual macOS Roblox client ships as com.roblox.RobloxPlayer (verified against
+        // /Applications/Roblox.app); the plain com.roblox.roblox entry above never matched it.
+        // Compared lowercased, so entries here must be lowercase.
+        "com.roblox.robloxplayer",
     ]
 
     public static let knownVideoBundleIDs: Set<String> = [
