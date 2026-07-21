@@ -212,6 +212,12 @@ private struct ChildDashboardView: View {
     @ObservedObject var model: AppModel
     @State private var selectedCategory: ActivityCategory = .game
     @State private var selectedDuration = 30
+    @State private var scheduleLater = false
+    @State private var scheduledStart = ChildDashboardView.nextRoundHalfHour()
+
+    private var scheduleTooFarAhead: Bool {
+        scheduleLater && scheduledStart > Date().addingTimeInterval(14 * 86_400)
+    }
 
     var body: some View {
         ZStack {
@@ -285,13 +291,53 @@ private struct ChildDashboardView: View {
                             }
                             .frame(width: 150)
                             Button("发送申请") {
-                                model.requestTemporaryUse(category: selectedCategory, durationMinutes: selectedDuration)
+                                model.requestTemporaryUse(
+                                    category: selectedCategory,
+                                    durationMinutes: selectedDuration,
+                                    startsAt: scheduleLater ? scheduledStart : nil
+                                )
                             }
                             .buttonStyle(.borderedProminent)
+                            .disabled(scheduleTooFarAhead)
                         }
-                        Text("家长批准后立即生效，到期自动恢复原来的每周时段。")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                        HStack {
+                            Picker("开始方式", selection: $scheduleLater) {
+                                Text("立即开始").tag(false)
+                                Text("预约时间").tag(true)
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 180)
+                            .labelsHidden()
+                            if scheduleLater {
+                                DatePicker(
+                                    "开始时间",
+                                    selection: $scheduledStart,
+                                    displayedComponents: [.date, .hourAndMinute]
+                                )
+                                .labelsHidden()
+                                Text(temporaryWindowText(startsAt: scheduledStart, durationMinutes: selectedDuration))
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if scheduleTooFarAhead {
+                            Text("最多只能预约 14 天以内的时间。")
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                        } else {
+                            Text(scheduleLater
+                                 ? "家长批准后，会在预约时间自动生效，到期自动恢复原来的每周时段。"
+                                 : "家长批准后立即生效，到期自动恢复原来的每周时段。")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        if !model.requests.isEmpty {
+                            Divider()
+                            Text("我的申请").font(.headline)
+                            ForEach(model.requests.prefix(5)) { request in
+                                ChildRequestRow(request: request)
+                            }
+                        }
                     }
                     .cardStyle()
 
@@ -307,6 +353,61 @@ private struct ChildDashboardView: View {
             if let alert = model.activeAlert {
                 ChildAlertOverlay(alert: alert) { model.activeAlert = nil }
             }
+        }
+    }
+
+    /// Default for the schedule picker: the next round half hour (e.g. 15:12 → 15:30).
+    private static func nextRoundHalfHour(now: Date = Date()) -> Date {
+        let calendar = Calendar.current
+        var components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: now)
+        components.minute = (components.minute ?? 0) - ((components.minute ?? 0) % 30)
+        components.second = 0
+        let floor = calendar.date(from: components) ?? now
+        return floor.addingTimeInterval(30 * 60)
+    }
+}
+
+private struct ChildRequestRow: View {
+    let request: TemporaryRequest
+
+    var body: some View {
+        HStack(spacing: 10) {
+            CategoryIcon(category: request.category)
+            Text(request.category.displayName)
+            Text(windowText)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(statusText)
+                .font(.callout)
+                .foregroundStyle(statusColor)
+        }
+    }
+
+    private var windowText: String {
+        if let startsAt = request.startsAt {
+            return temporaryWindowText(startsAt: startsAt, durationMinutes: request.durationMinutes)
+        }
+        return "立即 · \(request.durationMinutes) 分钟"
+    }
+
+    private var statusText: String {
+        switch request.status {
+        case .pending: "待批准"
+        case .denied: "已拒绝"
+        case .approved:
+            if let startsAt = request.startsAt, startsAt > Date() {
+                "已批准 · \(temporaryStartText(startsAt)) 生效"
+            } else {
+                "已批准"
+            }
+        }
+    }
+
+    private var statusColor: Color {
+        switch request.status {
+        case .pending: .orange
+        case .approved: .green
+        case .denied: .secondary
         }
     }
 }
@@ -549,7 +650,7 @@ private struct RequestsView: View {
                         HStack(spacing: 16) {
                             CategoryIcon(category: request.category)
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("\(request.category.displayName) · \(request.durationMinutes) 分钟")
+                                Text(title(for: request))
                                     .font(.headline)
                                 Text(request.createdAt.formatted(date: .abbreviated, time: .shortened))
                                     .font(.caption)
@@ -572,6 +673,14 @@ private struct RequestsView: View {
             .padding(28)
         }
         .navigationTitle("临时申请")
+    }
+
+    private func title(for request: TemporaryRequest) -> String {
+        var title = "\(request.category.displayName) · \(request.durationMinutes) 分钟"
+        if let startsAt = request.startsAt {
+            title += " · \(temporaryWindowText(startsAt: startsAt, durationMinutes: request.durationMinutes))"
+        }
+        return title
     }
 }
 

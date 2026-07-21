@@ -30,6 +30,7 @@ export function mapRequest(row: Record<string, unknown>) {
     id: row.id,
     category: row.category,
     durationMinutes: Number(row.duration_minutes),
+    startsAt: row.starts_at ? asISO(row.starts_at) : null,
     status: row.status,
     createdAt: asISO(row.created_at),
     resolvedAt: row.resolved_at ? asISO(row.resolved_at) : null,

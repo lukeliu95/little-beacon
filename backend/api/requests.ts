@@ -1,5 +1,5 @@
 import { database } from "../src/db.js";
-import { isAllowedDuration, isRestrictedCategory } from "../src/domain.js";
+import { isAllowedDuration, isRestrictedCategory, parseRequestStartsAt } from "../src/domain.js";
 import { authenticate, errorResponse, HttpError, json, nodeHandler, readJSON, requireMethod } from "../src/http.js";
 
 async function handler(request: Request): Promise<Response> {
@@ -14,12 +14,15 @@ async function handler(request: Request): Promise<Response> {
     }
     const createdAt = new Date(body.createdAt);
     if (Number.isNaN(createdAt.getTime())) throw new HttpError(400, "申请时间无效");
+    const startsAt = parseRequestStartsAt(body.startsAt);
+    if (startsAt === "invalid") throw new HttpError(400, "预约时间无效");
     const sql = database();
     await sql`INSERT INTO temporary_requests (
-      id, household_id, device_id, category, duration_minutes, status, created_at
+      id, household_id, device_id, category, duration_minutes, status, created_at, starts_at
     ) VALUES (
       ${body.id}, ${credential.householdID}, ${credential.deviceID}, ${body.category},
-      ${body.durationMinutes}, 'pending', ${createdAt.toISOString()}
+      ${body.durationMinutes}, 'pending', ${createdAt.toISOString()},
+      ${startsAt ? startsAt.toISOString() : null}
     ) ON CONFLICT (id) DO NOTHING`;
     return json({ ok: true }, 201);
   } catch (error) {

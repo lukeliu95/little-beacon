@@ -20,6 +20,24 @@ struct ChildAlert: Identifiable, Equatable {
     let tone: Tone
 }
 
+/// "7月22日 16:00" — when a scheduled temporary window begins. Shared by the child
+/// request form/list, the parent request list, and the new-request notification.
+func temporaryStartText(_ startsAt: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "zh_CN")
+    formatter.dateFormat = "M月d日 HH:mm"
+    return formatter.string(from: startsAt)
+}
+
+/// "7月22日 16:00–16:30" — the full requested window (start + duration).
+func temporaryWindowText(startsAt: Date, durationMinutes: Int) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "zh_CN")
+    formatter.dateFormat = "HH:mm"
+    let endsAt = startsAt.addingTimeInterval(TimeInterval(durationMinutes * 60))
+    return "\(temporaryStartText(startsAt))–\(formatter.string(from: endsAt))"
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var snapshot: LocalSnapshot
@@ -149,10 +167,11 @@ final class AppModel: ObservableObject {
                 }
                 for request in response.requests
                     where request.status == .pending && !oldRequestIDs.contains(request.id) {
-                    NotificationService.post(
-                        title: "新的临时使用申请",
-                        body: "申请 \(request.category.displayName) \(request.durationMinutes) 分钟"
-                    )
+                    var body = "申请 \(request.category.displayName) \(request.durationMinutes) 分钟"
+                    if let startsAt = request.startsAt {
+                        body += " · \(temporaryWindowText(startsAt: startsAt, durationMinutes: request.durationMinutes))"
+                    }
+                    NotificationService.post(title: "新的临时使用申请", body: body)
                 }
             case .child:
                 let response = try await client.fetchChildSync()
@@ -236,9 +255,15 @@ final class AppModel: ObservableObject {
         Task { await uploadRulesIfPossible(rulesToUpload) }
     }
 
-    func requestTemporaryUse(category: ActivityCategory, durationMinutes: Int) {
+    func requestTemporaryUse(category: ActivityCategory, durationMinutes: Int, startsAt: Date? = nil) {
         guard [15, 30, 60].contains(durationMinutes) else { return }
-        let request = TemporaryRequest(category: category, durationMinutes: durationMinutes)
+        // A scheduled time that has already passed degrades to an immediate request.
+        let effectiveStartsAt = startsAt.flatMap { $0 > Date() ? $0 : nil }
+        let request = TemporaryRequest(
+            category: category,
+            durationMinutes: durationMinutes,
+            startsAt: effectiveStartsAt
+        )
         snapshot.requests.append(request)
         persist()
         Task {
@@ -257,11 +282,13 @@ final class AppModel: ObservableObject {
         snapshot.requests[index].status = approved ? .approved : .denied
         snapshot.requests[index].resolvedAt = Date()
         if approved && !hasRemoteConfiguration {
+            // A scheduled request grants its requested window; an immediate one starts now.
+            let grantStart = request.startsAt ?? Date()
             snapshot.temporaryGrants.append(
                 TemporaryGrant(
                     category: request.category,
-                    startsAt: Date(),
-                    endsAt: Date().addingTimeInterval(TimeInterval(request.durationMinutes * 60))
+                    startsAt: grantStart,
+                    endsAt: grantStart.addingTimeInterval(TimeInterval(request.durationMinutes * 60))
                 )
             )
         }

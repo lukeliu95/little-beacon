@@ -244,6 +244,9 @@ public struct TemporaryRequest: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var category: ActivityCategory
     public var durationMinutes: Int
+    /// When the child wants the temporary window to begin. `nil` keeps the legacy
+    /// meaning: start immediately once the parent approves.
+    public var startsAt: Date?
     public var status: TemporaryRequestStatus
     public var createdAt: Date
     public var resolvedAt: Date?
@@ -252,6 +255,7 @@ public struct TemporaryRequest: Codable, Equatable, Identifiable, Sendable {
         id: UUID = UUID(),
         category: ActivityCategory,
         durationMinutes: Int,
+        startsAt: Date? = nil,
         status: TemporaryRequestStatus = .pending,
         createdAt: Date = Date(),
         resolvedAt: Date? = nil
@@ -259,9 +263,26 @@ public struct TemporaryRequest: Codable, Equatable, Identifiable, Sendable {
         self.id = id
         self.category = category
         self.durationMinutes = durationMinutes
+        self.startsAt = startsAt
         self.status = status
         self.createdAt = createdAt
         self.resolvedAt = resolvedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, category, durationMinutes, startsAt, status, createdAt, resolvedAt
+    }
+
+    // Custom decoding: old saved state / old server payloads won't have startsAt.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        category = try container.decode(ActivityCategory.self, forKey: .category)
+        durationMinutes = try container.decode(Int.self, forKey: .durationMinutes)
+        startsAt = try container.decodeIfPresent(Date.self, forKey: .startsAt)
+        status = try container.decode(TemporaryRequestStatus.self, forKey: .status)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        resolvedAt = try container.decodeIfPresent(Date.self, forKey: .resolvedAt)
     }
 }
 
