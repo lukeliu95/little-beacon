@@ -5,10 +5,17 @@ import LittleBeaconCore
 final class ActivityMonitor {
     private let safariBundleID = "com.apple.Safari"
     private let chromeBundleID = "com.google.Chrome"
+    private let inactiveSessionBundleIDs: Set<String> = [
+        "com.apple.loginwindow",
+        "com.apple.ScreenSaver.Engine",
+    ]
 
     func observeFrontmostActivity() -> ActivityObservation {
         guard let app = NSWorkspace.shared.frontmostApplication else { return .idle }
         let bundleID = app.bundleIdentifier
+        if let bundleID, inactiveSessionBundleIDs.contains(bundleID) {
+            return .idle
+        }
         var domain: String?
         if bundleID == safariBundleID {
             domain = readDomain(script: "tell application \"Safari\" to get URL of current tab of front window")

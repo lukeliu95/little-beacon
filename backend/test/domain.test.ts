@@ -7,6 +7,7 @@ import {
   hashPairingCode,
   hashToken,
   isAllowedDuration,
+  mergeMissingRuleSettings,
   parseRequestStartsAt,
   secureStringEqual,
   shouldAcceptRuleRevision,
@@ -70,6 +71,31 @@ test("starter rules pass validation and malformed windows do not", () => {
   const malformed = structuredClone(rules);
   malformed.activityRules[0]!.windows[0]!.weekday = 9;
   assert.equal(validateRuleSet(malformed), false);
+});
+
+test("viewing-distance settings are bounded and malformed settings are rejected", () => {
+  const rules = defaultRules();
+  assert.equal(validateRuleSet(rules), true);
+
+  const tooFrequent = structuredClone(rules);
+  tooFrequent.viewingDistancePolicy.checkIntervalMinutes = 1;
+  assert.equal(validateRuleSet(tooFrequent), false);
+
+  const impossibleDistance = structuredClone(rules);
+  impossibleDistance.viewingDistancePolicy.minimumDistanceCentimeters = 500;
+  assert.equal(validateRuleSet(impossibleDistance), false);
+});
+
+test("older rule uploads preserve camera settings they do not understand", () => {
+  const current = defaultRules();
+  current.viewingDistancePolicy.enabled = true;
+  const incoming = structuredClone(current) as Record<string, unknown>;
+  delete incoming.viewingDistancePolicy;
+  incoming.revision = 2;
+
+  const merged = mergeMissingRuleSettings(incoming, current);
+  assert.deepEqual(merged.viewingDistancePolicy, current.viewingDistancePolicy);
+  assert.equal(merged.revision, 2);
 });
 
 test("API dates use seconds precision for older Apple ISO-8601 decoders", () => {

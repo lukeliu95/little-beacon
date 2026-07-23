@@ -50,27 +50,34 @@ final class AppModel: ObservableObject {
     @Published var isBusy = false
     @Published var lastError: String?
     @Published var autoStartMessage = ""
+    @Published private(set) var viewingDistanceStatusMessage = "坐姿距离提醒未开启"
+    @Published private(set) var isViewingDistanceBusy = false
 
     private let store = LocalStore()
     private let classifier = ActivityClassifier()
     private let evaluator = RuleEvaluator()
     private let activityMonitor = ActivityMonitor()
+    private let viewingDistanceMonitor = ViewingDistanceMonitor()
     private var violationMachine = ViolationMachine()
     private var pomodoroTimer = PomodoroTimer()
     private var monitorTimer: Timer?
     private var syncTimer: Timer?
     private var activeEventID: UUID?
     private var lastTick = Date()
+    private var nextViewingDistanceCheckAt = Date.distantPast
+    private var viewingDistanceWarningStage = 0
 
     init() {
         snapshot = store.load()
         NotificationService.requestAuthorization()
         autoStartMessage = AutoStartManager.registerIfPossible()
+        refreshViewingDistanceStatus()
         startServices()
     }
 
     var role: DeviceRole { snapshot.role }
     var rules: RuleSet { snapshot.rules }
+    var hasViewingDistanceCalibration: Bool { snapshot.viewingDistanceCalibration != nil }
     var events: [ViolationEvent] { snapshot.events.sorted { $0.startedAt > $1.startedAt } }
     var requests: [TemporaryRequest] { snapshot.requests.sorted { $0.createdAt > $1.createdAt } }
     var currentStatus: DeviceStatus {
@@ -95,10 +102,13 @@ final class AppModel: ObservableObject {
         snapshot = LocalSnapshot()
         violationMachine = ViolationMachine()
         pomodoroTimer = PomodoroTimer()
+        nextViewingDistanceCheckAt = .distantPast
+        viewingDistanceWarningStage = 0
         warningMessage = nil
         activeAlert = nil
         connectionMessage = "本地模式"
         pairingCode = nil
+        refreshViewingDistanceStatus()
         persist()
     }
 
@@ -179,6 +189,7 @@ final class AppModel: ObservableObject {
                 snapshot.temporaryGrants = response.grants
                 snapshot.requests = response.requests
                 snapshot.lastRulesSyncAt = Date()
+                refreshViewingDistanceStatus()
                 snapshot.prune()
                 persist()
                 try await client.updateStatus(snapshot.currentStatus)
@@ -253,6 +264,63 @@ final class AppModel: ObservableObject {
         persist()
         let rulesToUpload = snapshot.rules
         Task { await uploadRulesIfPossible(rulesToUpload) }
+    }
+
+    func setViewingDistanceEnabled(_ enabled: Bool) {
+        snapshot.rules.viewingDistancePolicy.enabled = enabled
+        snapshot.rules.revision += 1
+        refreshViewingDistanceStatus()
+        persist()
+        let rulesToUpload = snapshot.rules
+        Task { await uploadRulesIfPossible(rulesToUpload) }
+    }
+
+    func setViewingDistanceCheckIntervalMinutes(_ minutes: Int) {
+        snapshot.rules.viewingDistancePolicy.checkIntervalMinutes = min(60, max(5, minutes))
+        snapshot.rules.revision += 1
+        persist()
+        let rulesToUpload = snapshot.rules
+        Task { await uploadRulesIfPossible(rulesToUpload) }
+    }
+
+    func setViewingDistanceMinimumCentimeters(_ centimeters: Int) {
+        snapshot.rules.viewingDistancePolicy.minimumDistanceCentimeters = min(80, max(30, centimeters))
+        snapshot.rules.revision += 1
+        persist()
+        let rulesToUpload = snapshot.rules
+        Task { await uploadRulesIfPossible(rulesToUpload) }
+    }
+
+    func calibrateViewingDistance() async {
+        guard role == .child, snapshot.rules.viewingDistancePolicy.enabled else { return }
+        guard !isViewingDistanceBusy else { return }
+        isViewingDistanceBusy = true
+        viewingDistanceStatusMessage = "正在申请摄像头权限…"
+        defer { isViewingDistanceBusy = false }
+
+        let permission = await ViewingDistanceMonitor.requestPermission()
+        guard permission == .authorized else {
+            refreshViewingDistanceStatus()
+            return
+        }
+
+        viewingDistanceStatusMessage = "正在校准，请坐在设定距离并正对屏幕…"
+        do {
+            let policy = snapshot.rules.viewingDistancePolicy
+            snapshot.viewingDistanceCalibration = try await viewingDistanceMonitor.calibrate(
+                referenceDistanceCentimeters: policy.minimumDistanceCentimeters
+            )
+            viewingDistanceWarningStage = 0
+            nextViewingDistanceCheckAt = Date().addingTimeInterval(
+                TimeInterval(policy.checkIntervalMinutes * 60)
+            )
+            persist()
+            viewingDistanceStatusMessage = "校准完成；之后只会短暂检查，不保存画面。"
+            lastError = nil
+        } catch {
+            viewingDistanceStatusMessage = "校准没有完成"
+            lastError = error.localizedDescription
+        }
     }
 
     func requestTemporaryUse(category: ActivityCategory, durationMinutes: Int, startsAt: Date? = nil) {
@@ -395,14 +463,134 @@ final class AppModel: ObservableObject {
             )
         }
 
+        maybeCheckViewingDistance(isIdle: isIdle, now: now)
         updateActiveEvent()
         snapshot.prune(now: now)
         persist()
     }
 
-    private func presentAlert(title: String, message: String, tone: ChildAlert.Tone) {
+    private func presentAlert(
+        title: String,
+        message: String,
+        tone: ChildAlert.Tone,
+        useDistanceAlarm: Bool = false
+    ) {
         activeAlert = ChildAlert(title: title, message: message, tone: tone)
-        SoundService.playAlert()
+        if useDistanceAlarm {
+            SoundService.playDistanceAlarm()
+        } else {
+            SoundService.playAlert()
+        }
+    }
+
+    private func maybeCheckViewingDistance(isIdle: Bool, now: Date) {
+        let policy = snapshot.rules.viewingDistancePolicy
+        guard role == .child,
+              policy.enabled,
+              !isIdle,
+              !isViewingDistanceBusy,
+              (activeAlert == nil || viewingDistanceWarningStage > 0),
+              now >= nextViewingDistanceCheckAt else {
+            return
+        }
+        guard ViewingDistanceMonitor.permissionState == .authorized else {
+            refreshViewingDistanceStatus()
+            nextViewingDistanceCheckAt = now.addingTimeInterval(5 * 60)
+            return
+        }
+        guard let calibration = snapshot.viewingDistanceCalibration else {
+            viewingDistanceStatusMessage = "等待在孩子端完成一次安全距离校准"
+            nextViewingDistanceCheckAt = now.addingTimeInterval(5 * 60)
+            return
+        }
+
+        isViewingDistanceBusy = true
+        viewingDistanceStatusMessage = "正在短暂检查坐姿距离…"
+        nextViewingDistanceCheckAt = now.addingTimeInterval(
+            TimeInterval(policy.checkIntervalMinutes * 60)
+        )
+        let wasTooClose = viewingDistanceWarningStage > 0
+
+        Task {
+            defer { isViewingDistanceBusy = false }
+            do {
+                let assessment = try await viewingDistanceMonitor.check(
+                    calibration: calibration,
+                    policy: policy,
+                    wasTooClose: wasTooClose
+                )
+                guard snapshot.rules.viewingDistancePolicy.enabled else {
+                    refreshViewingDistanceStatus()
+                    return
+                }
+                handleViewingDistanceAssessment(assessment, policy: policy)
+                lastError = nil
+            } catch let error as ViewingDistanceMonitorError {
+                viewingDistanceStatusMessage = error.localizedDescription
+                if case .cameraChanged = error {
+                    snapshot.viewingDistanceCalibration = nil
+                    persist()
+                }
+            } catch {
+                viewingDistanceStatusMessage = "这次距离检查没有完成，稍后会再试。"
+            }
+        }
+    }
+
+    private func handleViewingDistanceAssessment(
+        _ assessment: ViewingDistanceAssessment,
+        policy: ViewingDistancePolicy
+    ) {
+        switch assessment {
+        case let .safe(estimatedCentimeters):
+            viewingDistanceWarningStage = 0
+            viewingDistanceStatusMessage = "最近检查：距离合适（约 \(estimatedCentimeters) 厘米）"
+            nextViewingDistanceCheckAt = Date().addingTimeInterval(
+                TimeInterval(policy.checkIntervalMinutes * 60)
+            )
+        case let .tooClose(estimatedCentimeters):
+            if viewingDistanceWarningStage == 0 {
+                viewingDistanceWarningStage = 1
+                viewingDistanceStatusMessage = "检测到距离过近"
+                nextViewingDistanceCheckAt = Date().addingTimeInterval(10)
+                presentAlert(
+                    title: "往后坐一点吧",
+                    message: "你离屏幕有点近了（大约 \(estimatedCentimeters) 厘米），眼睛也想喘口气。",
+                    tone: .gentle
+                )
+            } else {
+                viewingDistanceWarningStage = 2
+                viewingDistanceStatusMessage = "距离仍然过近，已发出提醒"
+                nextViewingDistanceCheckAt = Date().addingTimeInterval(2 * 60)
+                presentAlert(
+                    title: "距离屏幕太近了",
+                    message: "请先往后坐到至少 \(policy.minimumDistanceCentimeters) 厘米，再继续使用电脑。",
+                    tone: .warning,
+                    useDistanceAlarm: true
+                )
+            }
+        case .inconclusive:
+            viewingDistanceStatusMessage = "这次没有稳定识别人脸，未作判断。"
+            nextViewingDistanceCheckAt = Date().addingTimeInterval(2 * 60)
+        }
+    }
+
+    private func refreshViewingDistanceStatus() {
+        guard snapshot.rules.viewingDistancePolicy.enabled else {
+            viewingDistanceStatusMessage = "坐姿距离提醒未开启"
+            viewingDistanceWarningStage = 0
+            return
+        }
+        switch ViewingDistanceMonitor.permissionState {
+        case .notDetermined:
+            viewingDistanceStatusMessage = "等待孩子端授权摄像头并完成校准"
+        case .denied, .restricted:
+            viewingDistanceStatusMessage = "摄像头权限未开启，无法检查距离"
+        case .authorized:
+            viewingDistanceStatusMessage = snapshot.viewingDistanceCalibration == nil
+                ? "摄像头已授权，等待安全距离校准"
+                : "坐姿距离提醒已准备好"
+        }
     }
 
     private func process(actions: [ViolationAction], now: Date) {

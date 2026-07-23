@@ -15,6 +15,19 @@ enum SoundService {
             NSSound.beep()
         }
     }
+
+    static func playDistanceAlarm() {
+        for delay in [0.0, 0.45, 0.9] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                let sound = NSSound(named: "Sosumi") ?? NSSound(named: "Glass")
+                if let sound {
+                    sound.play()
+                } else {
+                    NSSound.beep()
+                }
+            }
+        }
+    }
 }
 
 enum NotificationService {

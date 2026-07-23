@@ -1,5 +1,9 @@
 import { database, rows } from "../src/db.js";
-import { shouldAcceptRuleRevision, validateRuleSet } from "../src/domain.js";
+import {
+  mergeMissingRuleSettings,
+  shouldAcceptRuleRevision,
+  validateRuleSet,
+} from "../src/domain.js";
 import { authenticate, errorResponse, HttpError, json, nodeHandler, requireMethod } from "../src/http.js";
 
 async function handler(request: Request): Promise<Response> {
@@ -17,8 +21,9 @@ async function handler(request: Request): Promise<Response> {
     if (!shouldAcceptRuleRevision(currentRevision, incomingRevision)) {
       return json({ ok: true, revision: currentRevision });
     }
+    const documentToStore = mergeMissingRuleSettings(document, currentDocument);
     await sql`INSERT INTO rules (household_id, document, updated_at)
-      VALUES (${credential.householdID}, ${JSON.stringify(document)}::jsonb, now())
+      VALUES (${credential.householdID}, ${JSON.stringify(documentToStore)}::jsonb, now())
       ON CONFLICT (household_id) DO UPDATE
       SET document = EXCLUDED.document, updated_at = now()
       WHERE COALESCE((rules.document ->> 'revision')::integer, 0) <= ${incomingRevision}`;

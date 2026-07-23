@@ -3,6 +3,7 @@ import Testing
 @testable import LittleBeaconApp
 
 // Simulates a real family's on-disk state.json from before dailyUsage/dailyUsageNudgeShown
+// and viewingDistanceCalibration
 // existed on LocalSnapshot. LocalStore.load() falls back to a blank LocalSnapshot() if
 // decoding throws, so a missing key here must not throw keyNotFound.
 @Test func oldStateJSONWithoutUsageFieldsDecodesInsteadOfResetting() throws {
@@ -31,4 +32,5 @@ import Testing
     #expect(snapshot.dailyUsageNudgeShown == false)
     #expect(snapshot.rules.pomodoroEnabled == true)
     #expect(snapshot.currentStatus.dailyUsageSeconds == 0)
+    #expect(snapshot.viewingDistanceCalibration == nil)
 }
