@@ -276,6 +276,10 @@ private struct ChildDashboardView: View {
                         .cardStyle()
                     }
 
+                    if model.rules.viewingDistancePolicy.enabled {
+                        ViewingDistanceSetupCard(model: model)
+                    }
+
                     VStack(alignment: .leading, spacing: 16) {
                         Text("申请临时使用").font(.title2.bold())
                         HStack {
@@ -470,6 +474,44 @@ private struct ChildAlertOverlay: View {
     }
     private var tint: Color {
         alert.tone == .gentle ? .teal : .orange
+    }
+}
+
+private struct ViewingDistanceSetupCard: View {
+    @ObservedObject var model: AppModel
+
+    private var policy: ViewingDistancePolicy {
+        model.rules.viewingDistancePolicy
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("坐姿距离提醒", systemImage: "camera.metering.center.weighted")
+                    .font(.title2.bold())
+                Spacer()
+                if model.isViewingDistanceBusy {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            Text(model.viewingDistanceStatusMessage)
+                .foregroundStyle(.secondary)
+            Text(
+                "家长设置为每 \(policy.checkIntervalMinutes) 分钟短暂检查一次，"
+                + "最低距离 \(policy.minimumDistanceCentimeters) 厘米。"
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            Text("校准前，请坐到设定距离、正对屏幕并保持几秒。画面只在这台 Mac 的内存里处理，不拍照、不录像、也不上传。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Button(model.hasViewingDistanceCalibration ? "重新校准安全距离" : "授权摄像头并校准") {
+                Task { await model.calibrateViewingDistance() }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.isViewingDistanceBusy)
+        }
+        .cardStyle()
     }
 }
 
@@ -759,6 +801,34 @@ private struct SettingsView: View {
                             step: 30
                         )
                         Text("只提醒，不会结束程序，也不计入违规。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Divider()
+                    Toggle("坐姿距离提醒", isOn: Binding(
+                        get: { model.rules.viewingDistancePolicy.enabled },
+                        set: { model.setViewingDistanceEnabled($0) }
+                    ))
+                    if model.rules.viewingDistancePolicy.enabled {
+                        Stepper(
+                            "每 \(model.rules.viewingDistancePolicy.checkIntervalMinutes) 分钟检查一次",
+                            value: Binding(
+                                get: { model.rules.viewingDistancePolicy.checkIntervalMinutes },
+                                set: { model.setViewingDistanceCheckIntervalMinutes($0) }
+                            ),
+                            in: 5...60,
+                            step: 5
+                        )
+                        Stepper(
+                            "最低安全距离 \(model.rules.viewingDistancePolicy.minimumDistanceCentimeters) 厘米",
+                            value: Binding(
+                                get: { model.rules.viewingDistancePolicy.minimumDistanceCentimeters },
+                                set: { model.setViewingDistanceMinimumCentimeters($0) }
+                            ),
+                            in: 30...80,
+                            step: 5
+                        )
+                        Text("开启后，仍需在孩子 Mac 上明确授权摄像头并完成一次校准。只做本机短时判断，不上传画面。")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }

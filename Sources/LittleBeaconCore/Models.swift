@@ -87,6 +87,9 @@ public struct RuleSet: Codable, Equatable, Sendable {
     public var pomodoroEnabled: Bool
     /// Soft daily-usage nudge threshold in seconds. `nil` disables the nudge; this never enforces or ends activity.
     public var dailyUsageThresholdSeconds: Int?
+    /// Periodic, camera-based "too close to the screen" reminder. Disabled until the
+    /// family explicitly enables it and the child Mac completes local calibration.
+    public var viewingDistancePolicy: ViewingDistancePolicy
 
     public init(
         revision: Int = 1,
@@ -94,7 +97,8 @@ public struct RuleSet: Codable, Equatable, Sendable {
         activityRules: [ActivityRule],
         overrides: [ClassificationOverride] = [],
         pomodoroEnabled: Bool = true,
-        dailyUsageThresholdSeconds: Int? = 7200
+        dailyUsageThresholdSeconds: Int? = 7200,
+        viewingDistancePolicy: ViewingDistancePolicy = .disabled
     ) {
         self.revision = revision
         self.timeZoneIdentifier = timeZoneIdentifier
@@ -102,11 +106,12 @@ public struct RuleSet: Codable, Equatable, Sendable {
         self.overrides = overrides
         self.pomodoroEnabled = pomodoroEnabled
         self.dailyUsageThresholdSeconds = dailyUsageThresholdSeconds
+        self.viewingDistancePolicy = viewingDistancePolicy
     }
 
     private enum CodingKeys: String, CodingKey {
         case revision, timeZoneIdentifier, activityRules, overrides
-        case pomodoroEnabled, dailyUsageThresholdSeconds
+        case pomodoroEnabled, dailyUsageThresholdSeconds, viewingDistancePolicy
     }
 
     // Custom decoding keeps old saved/remote documents (missing the two newest keys) loadable
@@ -119,6 +124,10 @@ public struct RuleSet: Codable, Equatable, Sendable {
         overrides = try container.decode([ClassificationOverride].self, forKey: .overrides)
         pomodoroEnabled = try container.decodeIfPresent(Bool.self, forKey: .pomodoroEnabled) ?? true
         dailyUsageThresholdSeconds = try container.decodeIfPresent(Int.self, forKey: .dailyUsageThresholdSeconds) ?? 7200
+        viewingDistancePolicy = try container.decodeIfPresent(
+            ViewingDistancePolicy.self,
+            forKey: .viewingDistancePolicy
+        ) ?? .disabled
     }
 
     public static var starter: RuleSet {

@@ -88,7 +88,37 @@ export function defaultRules() {
     // nudge threshold. Both are independent of the game/video rule engine above.
     pomodoroEnabled: true,
     dailyUsageThresholdSeconds: 7_200,
+    viewingDistancePolicy: {
+      enabled: false,
+      checkIntervalMinutes: 10,
+      minimumDistanceCentimeters: 45,
+    },
   };
+}
+
+const optionalRuleSettingKeys = [
+  "pomodoroEnabled",
+  "dailyUsageThresholdSeconds",
+  "viewingDistancePolicy",
+] as const;
+
+/**
+ * Older clients do not know newer optional rule settings. Preserve those settings when an
+ * otherwise newer whole-document upload omits them, instead of silently disabling a feature
+ * that another device configured.
+ */
+export function mergeMissingRuleSettings(
+  incoming: Record<string, unknown>,
+  current: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const merged = { ...incoming };
+  if (!current) return merged;
+  for (const key of optionalRuleSettingKeys) {
+    if (merged[key] === undefined && current[key] !== undefined) {
+      merged[key] = current[key];
+    }
+  }
+  return merged;
 }
 
 export function validateRuleSet(value: unknown): value is Record<string, unknown> {
@@ -105,6 +135,31 @@ export function validateRuleSet(value: unknown): value is Record<string, unknown
     && !(Number.isInteger(rules.dailyUsageThresholdSeconds) && Number(rules.dailyUsageThresholdSeconds) >= 0)
   ) {
     return false;
+  }
+  if (rules.viewingDistancePolicy !== undefined) {
+    if (
+      !rules.viewingDistancePolicy
+      || typeof rules.viewingDistancePolicy !== "object"
+      || Array.isArray(rules.viewingDistancePolicy)
+    ) {
+      return false;
+    }
+    const policy = rules.viewingDistancePolicy as Record<string, unknown>;
+    if (typeof policy.enabled !== "boolean") return false;
+    if (
+      !Number.isInteger(policy.checkIntervalMinutes)
+      || Number(policy.checkIntervalMinutes) < 5
+      || Number(policy.checkIntervalMinutes) > 60
+    ) {
+      return false;
+    }
+    if (
+      !Number.isInteger(policy.minimumDistanceCentimeters)
+      || Number(policy.minimumDistanceCentimeters) < 30
+      || Number(policy.minimumDistanceCentimeters) > 80
+    ) {
+      return false;
+    }
   }
   return rules.activityRules.every((rule) => {
     if (!rule || typeof rule !== "object") return false;

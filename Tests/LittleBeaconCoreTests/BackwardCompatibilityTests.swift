@@ -17,6 +17,7 @@ import Testing
     let rules = try decoder.decode(RuleSet.self, from: oldJSON)
     #expect(rules.pomodoroEnabled == true)
     #expect(rules.dailyUsageThresholdSeconds == 7_200)
+    #expect(rules.viewingDistancePolicy == .disabled)
 }
 
 @Test func oldDeviceStatusJSONDecodesWithDefaultForNewField() throws {

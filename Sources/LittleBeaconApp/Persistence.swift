@@ -18,13 +18,15 @@ struct LocalSnapshot: Codable {
     var lastRulesSyncAt: Date?
     var dailyUsage = DailyUsageTracker()
     var dailyUsageNudgeShown = false
+    /// Device-local geometric calibration only; never included in family-rule sync.
+    var viewingDistanceCalibration: ViewingDistanceCalibration?
 
     init() {}
 
     private enum CodingKeys: String, CodingKey {
         case role, deviceName, apiBaseURL, householdID, deviceID, rules, temporaryGrants
         case requests, events, pendingEventIDs, currentStatus, monitoringEnabled, lastRulesSyncAt
-        case dailyUsage, dailyUsageNudgeShown
+        case dailyUsage, dailyUsageNudgeShown, viewingDistanceCalibration
     }
 
     // Custom decoding: a real family's existing state.json predates dailyUsage/dailyUsageNudgeShown.
@@ -47,6 +49,10 @@ struct LocalSnapshot: Codable {
         lastRulesSyncAt = try container.decodeIfPresent(Date.self, forKey: .lastRulesSyncAt)
         dailyUsage = try container.decodeIfPresent(DailyUsageTracker.self, forKey: .dailyUsage) ?? DailyUsageTracker()
         dailyUsageNudgeShown = try container.decodeIfPresent(Bool.self, forKey: .dailyUsageNudgeShown) ?? false
+        viewingDistanceCalibration = try container.decodeIfPresent(
+            ViewingDistanceCalibration.self,
+            forKey: .viewingDistanceCalibration
+        )
     }
 
     mutating func prune(now: Date = Date()) {
