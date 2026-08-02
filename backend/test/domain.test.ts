@@ -67,6 +67,7 @@ test("garbage or out-of-range start times are rejected", () => {
 
 test("starter rules pass validation and malformed windows do not", () => {
   const rules = defaultRules();
+  assert.equal(rules.pomodoroMode, "gentle");
   assert.equal(validateRuleSet(rules), true);
   const malformed = structuredClone(rules);
   malformed.activityRules[0]!.windows[0]!.weekday = 9;
@@ -96,6 +97,25 @@ test("older rule uploads preserve camera settings they do not understand", () =>
   const merged = mergeMissingRuleSettings(incoming, current);
   assert.deepEqual(merged.viewingDistancePolicy, current.viewingDistancePolicy);
   assert.equal(merged.revision, 2);
+});
+
+test("older rule uploads preserve enforced pomodoro mode", () => {
+  const current = defaultRules();
+  current.pomodoroMode = "enforced";
+  const incoming = structuredClone(current) as Record<string, unknown>;
+  delete incoming.pomodoroMode;
+  incoming.revision = 2;
+
+  const merged = mergeMissingRuleSettings(incoming, current);
+  assert.equal(merged.pomodoroMode, "enforced");
+});
+
+test("unknown pomodoro modes are rejected", () => {
+  const rules = defaultRules();
+  const malformed = structuredClone(rules) as Record<string, unknown>;
+  malformed.pomodoroMode = "please-let-me-skip";
+
+  assert.equal(validateRuleSet(malformed), false);
 });
 
 test("API dates use seconds precision for older Apple ISO-8601 decoders", () => {

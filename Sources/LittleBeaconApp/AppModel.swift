@@ -52,6 +52,7 @@ final class AppModel: ObservableObject {
     @Published var autoStartMessage = ""
     @Published private(set) var viewingDistanceStatusMessage = "坐姿距离提醒未开启"
     @Published private(set) var isViewingDistanceBusy = false
+    @Published private(set) var pomodoroBreakPhase: PomodoroBreakPhase = .counting(activeSeconds: 0, idleSeconds: 0)
 
     private let store = LocalStore()
     private let classifier = ActivityClassifier()
@@ -60,6 +61,8 @@ final class AppModel: ObservableObject {
     private let viewingDistanceMonitor = ViewingDistanceMonitor()
     private var violationMachine = ViolationMachine()
     private var pomodoroTimer = PomodoroTimer()
+    private var pomodoroBreakCoordinator: PomodoroBreakCoordinator?
+    private var pomodoroModeAtLastTick: PomodoroMode = .gentle
     private var monitorTimer: Timer?
     private var syncTimer: Timer?
     private var activeEventID: UUID?
@@ -69,6 +72,8 @@ final class AppModel: ObservableObject {
 
     init() {
         snapshot = store.load()
+        pomodoroModeAtLastTick = snapshot.rules.pomodoroMode
+        configurePomodoroCoordinator()
         NotificationService.requestAuthorization()
         autoStartMessage = AutoStartManager.registerIfPossible()
         refreshViewingDistanceStatus()
@@ -92,16 +97,23 @@ final class AppModel: ObservableObject {
     func configure(role: DeviceRole) {
         snapshot.role = role
         persist()
+        configurePomodoroCoordinator()
         startServices()
     }
 
     func resetConfiguration() {
+        guard pomodoroBreakCoordinator?.isActiveBreak != true else {
+            lastError = "强制休息进行中，完成休息并关闭提示后才能重新设置这台 Mac。"
+            return
+        }
         monitorTimer?.invalidate()
         syncTimer?.invalidate()
         KeychainStore.delete(role: snapshot.role)
         snapshot = LocalSnapshot()
         violationMachine = ViolationMachine()
         pomodoroTimer = PomodoroTimer()
+        try? pomodoroBreakCoordinator?.resetCounting()
+        ApplicationTerminationGate.shared.blocksTermination = false
         nextViewingDistanceCheckAt = .distantPast
         viewingDistanceWarningStage = 0
         warningMessage = nil
@@ -250,8 +262,8 @@ final class AppModel: ObservableObject {
         Task { await uploadRulesIfPossible(rulesToUpload) }
     }
 
-    func setPomodoroEnabled(_ enabled: Bool) {
-        snapshot.rules.pomodoroEnabled = enabled
+    func setPomodoroMode(_ mode: PomodoroMode) {
+        snapshot.rules.pomodoroMode = mode
         snapshot.rules.revision += 1
         persist()
         let rulesToUpload = snapshot.rules
@@ -397,13 +409,17 @@ final class AppModel: ObservableObject {
 
         if snapshot.role == .child && snapshot.monitoringEnabled {
             lastTick = Date()
-            monitorTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.monitorTick() }
             }
+            monitorTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
         }
-        syncTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.syncNow() }
         }
+        syncTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
         Task { await syncNow() }
     }
 
@@ -415,46 +431,50 @@ final class AppModel: ObservableObject {
         let activity = classifier.classify(observation, overrides: snapshot.rules.overrides)
         currentActivity = activity
         let isIdle = activity.category == .idle
+        let breakWasActive = pomodoroBreakCoordinator?.isActiveBreak == true
+        advancePomodoro(isIdle: isIdle, elapsedSeconds: delta, at: now)
+        let breakIsActive = pomodoroBreakCoordinator?.isActiveBreak == true
+        if !breakWasActive && breakIsActive {
+            warningMessage = nil
+            activeAlert = nil
+            activeEventID = nil
+            violationMachine = ViolationMachine()
+        }
+        let isEffectivelyIdle = isIdle || breakIsActive
 
         let previousDayKey = snapshot.dailyUsage.dayKey
-        snapshot.dailyUsage.advance(isIdle: isIdle, elapsedSeconds: delta, at: now)
+        snapshot.dailyUsage.advance(isIdle: isEffectivelyIdle, elapsedSeconds: delta, at: now)
         if snapshot.dailyUsage.dayKey != previousDayKey {
             snapshot.dailyUsageNudgeShown = false
         }
 
         snapshot.currentStatus = DeviceStatus(
-            category: activity.category,
+            category: breakIsActive ? .idle : activity.category,
             lastSeenAt: now,
             isOnline: true,
             dailyUsageSeconds: snapshot.dailyUsage.activeSeconds
         )
 
-        let allowed = evaluator.isAllowed(
-            category: activity.category,
-            at: now,
-            rules: snapshot.rules,
-            temporaryGrants: snapshot.temporaryGrants
-        )
-        let actions = violationMachine.advance(
-            activity: activity,
-            isAllowed: allowed,
-            elapsedSeconds: delta,
-            at: now
-        )
-        process(actions: actions, now: now)
-
-        if snapshot.rules.pomodoroEnabled,
-           pomodoroTimer.advance(isIdle: isIdle, elapsedSeconds: delta) == .breakSuggested {
-            presentAlert(
-                title: "休息一下",
-                message: "已经连续用了 25 分钟，起来看看远处，休息一下眼睛吧。",
-                tone: .gentle
+        if !breakIsActive {
+            let allowed = evaluator.isAllowed(
+                category: activity.category,
+                at: now,
+                rules: snapshot.rules,
+                temporaryGrants: snapshot.temporaryGrants
             )
+            let actions = violationMachine.advance(
+                activity: activity,
+                isAllowed: allowed,
+                elapsedSeconds: delta,
+                at: now
+            )
+            process(actions: actions, now: now)
         }
 
         if !snapshot.dailyUsageNudgeShown,
            let threshold = snapshot.rules.dailyUsageThresholdSeconds,
-           snapshot.dailyUsage.activeSeconds >= threshold {
+           snapshot.dailyUsage.activeSeconds >= threshold,
+           !breakIsActive {
             snapshot.dailyUsageNudgeShown = true
             presentAlert(
                 title: "今日用机提醒",
@@ -463,10 +483,84 @@ final class AppModel: ObservableObject {
             )
         }
 
-        maybeCheckViewingDistance(isIdle: isIdle, now: now)
+        maybeCheckViewingDistance(isIdle: isEffectivelyIdle, now: now)
         updateActiveEvent()
         snapshot.prune(now: now)
         persist()
+    }
+
+    private func advancePomodoro(isIdle: Bool, elapsedSeconds: TimeInterval, at date: Date) {
+        guard let coordinator = pomodoroBreakCoordinator else { return }
+
+        do {
+            if coordinator.isActiveBreak {
+                try coordinator.advance(isIdle: true, elapsedSeconds: elapsedSeconds, at: date)
+                return
+            }
+
+            let mode = snapshot.rules.pomodoroMode
+            if mode != pomodoroModeAtLastTick {
+                pomodoroTimer = PomodoroTimer()
+                try coordinator.resetCounting()
+                pomodoroModeAtLastTick = mode
+            }
+
+            switch mode {
+            case .off:
+                break
+            case .gentle:
+                if pomodoroTimer.advance(isIdle: isIdle, elapsedSeconds: elapsedSeconds) == .breakSuggested {
+                    presentAlert(
+                        title: "休息一下",
+                        message: "已经连续用了 25 分钟，起来看看远处，休息一下眼睛吧。",
+                        tone: .gentle
+                    )
+                }
+            case .enforced:
+                try coordinator.advance(isIdle: isIdle, elapsedSeconds: elapsedSeconds, at: date)
+            }
+        } catch {
+            lastError = "番茄钟状态没有保存成功：\(error.localizedDescription)"
+        }
+    }
+
+    private func configurePomodoroCoordinator() {
+        let sessionStore = PomodoroSessionStore()
+        let initialMachine: PomodoroBreakMachine? = snapshot.role == .child ? nil : PomodoroBreakMachine()
+        let shield = BreakShieldWindowController()
+        let alarm = BreakAlarmController()
+
+        do {
+            pomodoroBreakCoordinator = try PomodoroBreakCoordinator(
+                store: sessionStore,
+                shield: shield,
+                alarm: alarm,
+                initialMachine: initialMachine
+            )
+        } catch {
+            lastError = "番茄钟记录损坏，已从安全的空白状态恢复：\(error.localizedDescription)"
+            pomodoroBreakCoordinator = try? PomodoroBreakCoordinator(
+                store: sessionStore,
+                shield: shield,
+                alarm: alarm,
+                initialMachine: PomodoroBreakMachine()
+            )
+        }
+
+        guard let coordinator = pomodoroBreakCoordinator else {
+            ApplicationTerminationGate.shared.blocksTermination = false
+            return
+        }
+        pomodoroBreakPhase = coordinator.phase
+        ApplicationTerminationGate.shared.blocksTermination = snapshot.role == .child && coordinator.isActiveBreak
+        coordinator.onPhaseChange = { [weak self] phase in
+            guard let self else { return }
+            self.pomodoroBreakPhase = phase
+            ApplicationTerminationGate.shared.blocksTermination = self.snapshot.role == .child && phase.isActiveBreak
+        }
+        coordinator.onError = { [weak self] error in
+            self?.lastError = "番茄钟状态没有保存成功：\(error.localizedDescription)"
+        }
     }
 
     private func presentAlert(
@@ -487,6 +581,7 @@ final class AppModel: ObservableObject {
         let policy = snapshot.rules.viewingDistancePolicy
         guard role == .child,
               policy.enabled,
+              pomodoroBreakCoordinator?.isActiveBreak != true,
               !isIdle,
               !isViewingDistanceBusy,
               (activeAlert == nil || viewingDistanceWarningStage > 0),

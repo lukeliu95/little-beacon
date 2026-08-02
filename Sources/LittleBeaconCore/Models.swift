@@ -78,13 +78,26 @@ public struct ActivityRule: Codable, Equatable, Sendable {
     }
 }
 
+public enum PomodoroMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case off
+    case gentle
+    case enforced
+
+    public var id: String { rawValue }
+}
+
 public struct RuleSet: Codable, Equatable, Sendable {
     public var revision: Int
     public var timeZoneIdentifier: String
     public var activityRules: [ActivityRule]
     public var overrides: [ClassificationOverride]
-    /// 25-minute eye-care break reminder, independent of the game/video rule engine. On by default.
-    public var pomodoroEnabled: Bool
+    /// 25-minute eye-care break behavior, independent of the game/video rule engine.
+    public var pomodoroMode: PomodoroMode
+    /// Legacy compatibility surface for clients and documents that predate `pomodoroMode`.
+    public var pomodoroEnabled: Bool {
+        get { pomodoroMode != .off }
+        set { pomodoroMode = newValue ? .gentle : .off }
+    }
     /// Soft daily-usage nudge threshold in seconds. `nil` disables the nudge; this never enforces or ends activity.
     public var dailyUsageThresholdSeconds: Int?
     /// Periodic, camera-based "too close to the screen" reminder. Disabled until the
@@ -96,7 +109,7 @@ public struct RuleSet: Codable, Equatable, Sendable {
         timeZoneIdentifier: String = TimeZone.current.identifier,
         activityRules: [ActivityRule],
         overrides: [ClassificationOverride] = [],
-        pomodoroEnabled: Bool = true,
+        pomodoroMode: PomodoroMode = .gentle,
         dailyUsageThresholdSeconds: Int? = 7200,
         viewingDistancePolicy: ViewingDistancePolicy = .disabled
     ) {
@@ -104,14 +117,14 @@ public struct RuleSet: Codable, Equatable, Sendable {
         self.timeZoneIdentifier = timeZoneIdentifier
         self.activityRules = activityRules
         self.overrides = overrides
-        self.pomodoroEnabled = pomodoroEnabled
+        self.pomodoroMode = pomodoroMode
         self.dailyUsageThresholdSeconds = dailyUsageThresholdSeconds
         self.viewingDistancePolicy = viewingDistancePolicy
     }
 
     private enum CodingKeys: String, CodingKey {
         case revision, timeZoneIdentifier, activityRules, overrides
-        case pomodoroEnabled, dailyUsageThresholdSeconds, viewingDistancePolicy
+        case pomodoroMode, pomodoroEnabled, dailyUsageThresholdSeconds, viewingDistancePolicy
     }
 
     // Custom decoding keeps old saved/remote documents (missing the two newest keys) loadable
@@ -122,12 +135,26 @@ public struct RuleSet: Codable, Equatable, Sendable {
         timeZoneIdentifier = try container.decode(String.self, forKey: .timeZoneIdentifier)
         activityRules = try container.decode([ActivityRule].self, forKey: .activityRules)
         overrides = try container.decode([ClassificationOverride].self, forKey: .overrides)
-        pomodoroEnabled = try container.decodeIfPresent(Bool.self, forKey: .pomodoroEnabled) ?? true
+        let legacyPomodoroEnabled = try container.decodeIfPresent(Bool.self, forKey: .pomodoroEnabled) ?? true
+        pomodoroMode = try container.decodeIfPresent(PomodoroMode.self, forKey: .pomodoroMode)
+            ?? (legacyPomodoroEnabled ? .gentle : .off)
         dailyUsageThresholdSeconds = try container.decodeIfPresent(Int.self, forKey: .dailyUsageThresholdSeconds) ?? 7200
         viewingDistancePolicy = try container.decodeIfPresent(
             ViewingDistancePolicy.self,
             forKey: .viewingDistancePolicy
         ) ?? .disabled
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(revision, forKey: .revision)
+        try container.encode(timeZoneIdentifier, forKey: .timeZoneIdentifier)
+        try container.encode(activityRules, forKey: .activityRules)
+        try container.encode(overrides, forKey: .overrides)
+        try container.encode(pomodoroMode, forKey: .pomodoroMode)
+        try container.encode(pomodoroEnabled, forKey: .pomodoroEnabled)
+        try container.encodeIfPresent(dailyUsageThresholdSeconds, forKey: .dailyUsageThresholdSeconds)
+        try container.encode(viewingDistancePolicy, forKey: .viewingDistancePolicy)
     }
 
     public static var starter: RuleSet {
