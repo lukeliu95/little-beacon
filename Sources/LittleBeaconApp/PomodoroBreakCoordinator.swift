@@ -31,7 +31,7 @@ final class PomodoroBreakCoordinator {
 
     var onPhaseChange: ((PomodoroBreakPhase) -> Void)?
     var onError: ((Error) -> Void)?
-    private(set) var lastError: Error?
+    private(set) var lastPlaybackError: Error?
 
     init(
         store: PomodoroSessionPersisting,
@@ -155,7 +155,7 @@ final class PomodoroBreakCoordinator {
     }
 
     private func record(_ error: Error) {
-        lastError = error
+        lastPlaybackError = error
         onError?(error)
     }
 }

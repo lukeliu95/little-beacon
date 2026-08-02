@@ -29,16 +29,13 @@ public struct PomodoroClockEvidence: Codable, Equatable, Sendable {
 }
 
 public struct PomodoroClockReading: Equatable, Sendable {
-    public var wallDate: Date
     public var bootIdentifier: String?
     public var continuousSeconds: TimeInterval?
 
     public init(
-        wallDate: Date,
         bootIdentifier: String? = nil,
         continuousSeconds: TimeInterval? = nil
     ) {
-        self.wallDate = wallDate
         self.bootIdentifier = bootIdentifier
         self.continuousSeconds = continuousSeconds
     }

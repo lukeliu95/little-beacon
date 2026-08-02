@@ -16,6 +16,33 @@ func pomodoroBreakMessage(for phase: PomodoroBreakPhase, at date: Date) -> Strin
     }
 }
 
+func pomodoroBreakAccessibilityMessage(for phase: PomodoroBreakPhase, at date: Date) -> String {
+    switch phase {
+    case .awaitingAcknowledgement:
+        return "已经连续使用 25 分钟。请先确认，然后完整休息 5 分钟。"
+    case let .requiredBreak(_, _, closeAvailableAt):
+        let remainingSeconds = max(0, closeAvailableAt.timeIntervalSince(date))
+        let remainingMinutes = max(1, Int(ceil(remainingSeconds / 60)))
+        return "还需要休息 \(remainingMinutes) 分钟。"
+    case .readyToClose:
+        return "休息完成，可以关闭提示并开始下一轮。"
+    case .counting:
+        return ""
+    }
+}
+
+private func announcePomodoroAccessibilityMessage(_ message: String) {
+    guard !message.isEmpty else { return }
+    NSAccessibility.post(
+        element: NSApplication.shared,
+        notification: .announcementRequested,
+        userInfo: [
+            .announcement: message,
+            .priority: NSAccessibilityPriorityLevel.medium.rawValue,
+        ]
+    )
+}
+
 private final class BreakShieldPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
@@ -192,6 +219,7 @@ private struct BreakShieldView: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
+            let accessibilityMessage = pomodoroBreakAccessibilityMessage(for: phase, at: context.date)
             ZStack {
                 LinearGradient(
                     colors: [Color(red: 0.05, green: 0.07, blue: 0.14), Color(red: 0.13, green: 0.08, blue: 0.20)],
@@ -213,6 +241,15 @@ private struct BreakShieldView: View {
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 580)
                         .accessibilityIdentifier("pomodoro.break.status")
+                        .accessibilityLabel(accessibilityMessage)
+                        .onAppear {
+                            guard isPrimary else { return }
+                            announcePomodoroAccessibilityMessage(accessibilityMessage)
+                        }
+                        .onChange(of: accessibilityMessage) { _, newMessage in
+                            guard isPrimary else { return }
+                            announcePomodoroAccessibilityMessage(newMessage)
+                        }
 
                     if isPrimary {
                         actionButton

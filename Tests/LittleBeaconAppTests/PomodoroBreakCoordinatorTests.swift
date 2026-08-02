@@ -69,6 +69,37 @@ import Testing
 }
 
 @MainActor
+@Test func restoredRequiredBreakKeepsShieldAndBecomesClosableAfterRefresh() throws {
+    let acknowledgedAt = Date(timeIntervalSince1970: 1_800_000_000)
+    let closeAvailableAt = acknowledgedAt.addingTimeInterval(300)
+    let store = RecordingPomodoroStore(machineToLoad: PomodoroBreakMachine(
+        phase: .requiredBreak(
+            triggeredAt: acknowledgedAt.addingTimeInterval(-1_500),
+            acknowledgedAt: acknowledgedAt,
+            closeAvailableAt: closeAvailableAt
+        )
+    ))
+    let shield = RecordingBreakShield()
+    let alarm = RecordingBreakAlarm()
+    let coordinator = try PomodoroBreakCoordinator(
+        store: store,
+        shield: shield,
+        alarm: alarm,
+        now: acknowledgedAt.addingTimeInterval(100)
+    )
+
+    #expect(coordinator.phase == shield.presentedPhase)
+    #expect(coordinator.phase.isActiveBreak)
+    try coordinator.refresh(at: closeAvailableAt)
+    #expect(coordinator.phase == .readyToClose(
+        triggeredAt: acknowledgedAt.addingTimeInterval(-1_500),
+        acknowledgedAt: acknowledgedAt,
+        closeAvailableAt: closeAvailableAt
+    ))
+    #expect(shield.presentedPhase == coordinator.phase)
+}
+
+@MainActor
 @Test func alarmPlaybackFailureIsReportedWithoutDismissingTheShield() throws {
     let store = RecordingPomodoroStore()
     let shield = RecordingBreakShield()

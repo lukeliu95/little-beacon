@@ -73,7 +73,6 @@ import Testing
     let acknowledgedAt = Date(timeIntervalSince1970: 1_800_000_000)
     var machine = PomodoroBreakMachine(phase: .awaitingAcknowledgement(triggeredAt: acknowledgedAt))
     let acknowledgementClock = PomodoroClockReading(
-        wallDate: acknowledgedAt,
         bootIdentifier: "boot-a",
         continuousSeconds: 1_000
     )
@@ -83,7 +82,6 @@ import Testing
     #expect(machine.refresh(
         at: jumpedWallClock,
         clockReading: PomodoroClockReading(
-            wallDate: jumpedWallClock,
             bootIdentifier: "boot-a",
             continuousSeconds: 1_299.999
         )
@@ -91,7 +89,6 @@ import Testing
     #expect(machine.refresh(
         at: jumpedWallClock,
         clockReading: PomodoroClockReading(
-            wallDate: jumpedWallClock,
             bootIdentifier: "boot-a",
             continuousSeconds: 1_300
         )
@@ -104,7 +101,6 @@ import Testing
     _ = machine.acknowledge(
         at: acknowledgedAt,
         clockReading: PomodoroClockReading(
-            wallDate: acknowledgedAt,
             bootIdentifier: "boot-a",
             continuousSeconds: 10_000
         )
@@ -114,7 +110,6 @@ import Testing
     #expect(machine.refresh(
         at: afterRestart,
         clockReading: PomodoroClockReading(
-            wallDate: afterRestart,
             bootIdentifier: "boot-b",
             continuousSeconds: 20
         )

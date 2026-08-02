@@ -70,17 +70,11 @@ final class PomodoroSessionStore: PomodoroSessionPersisting {
     func save(_ machine: PomodoroBreakMachine) throws {
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         let data = try encoder.encode(PomodoroSessionEnvelope(machine: machine))
-        // Only promote a main file that still decodes. A corrupt main file must never replace
-        // the backup that just rescued us; otherwise the next interrupted write could leave
-        // two matching piles of nonsense.
-        if FileManager.default.fileExists(atPath: fileURL.path),
-           (try? decode(at: fileURL)) != nil {
-            if FileManager.default.fileExists(atPath: backupURL.path) {
-                try FileManager.default.removeItem(at: backupURL)
-            }
-            try FileManager.default.copyItem(at: fileURL, to: backupURL)
-        }
+        // A save is not successful until both independently atomic files contain the same
+        // newest state. Keeping the previous generation as "last good" can silently erase a
+        // just-triggered shield when the main file is later damaged.
         try data.write(to: fileURL, options: .atomic)
+        try data.write(to: backupURL, options: .atomic)
     }
 
     private func decode(at url: URL) throws -> PomodoroBreakMachine {

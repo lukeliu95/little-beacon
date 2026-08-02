@@ -17,7 +17,7 @@ import Testing
     #expect(try reader.load() == machine)
 }
 
-@Test func pomodoroSessionStoreFallsBackToTheLastKnownGoodFile() throws {
+@Test func pomodoroSessionStoreBacksUpTheLatestSuccessfullySavedState() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("PomodoroSessionStoreTests-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -36,25 +36,25 @@ import Testing
     try store.save(newer)
     try Data("not-json".utf8).write(to: directory.appendingPathComponent("pomodoro-session.json"))
 
-    #expect(try store.load() == lastKnownGood)
+    #expect(try store.load() == newer)
 }
 
-@Test func savingAfterFallbackNeverPromotesACorruptMainFileToLastKnownGood() throws {
+@Test func savingAfterFallbackRewritesBothDurableCopiesFromRecoveredState() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("PomodoroSessionStoreTests-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let store = PomodoroSessionStore(directoryURL: directory)
-    let lastKnownGood = PomodoroBreakMachine(
+    let firstState = PomodoroBreakMachine(
         phase: .awaitingAcknowledgement(triggeredAt: Date(timeIntervalSince1970: 1_800_000_000))
     )
-    try store.save(lastKnownGood)
+    try store.save(firstState)
     try store.save(PomodoroBreakMachine())
     try Data("not-json".utf8).write(to: directory.appendingPathComponent("pomodoro-session.json"))
 
     let recovered = try store.load()
-    #expect(recovered == lastKnownGood)
+    #expect(recovered == PomodoroBreakMachine())
     try store.save(recovered)
     try Data("broken-again".utf8).write(to: directory.appendingPathComponent("pomodoro-session.json"))
 
-    #expect(try store.load() == lastKnownGood)
+    #expect(try store.load() == PomodoroBreakMachine())
 }

@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import LittleBeaconCore
 
-func systemPomodoroClockReading(at wallDate: Date = Date()) -> PomodoroClockReading {
+func systemPomodoroClockReading(at _: Date = Date()) -> PomodoroClockReading {
     var timebase = mach_timebase_info_data_t()
     mach_timebase_info(&timebase)
     let continuousNanoseconds = Double(mach_continuous_time())
@@ -17,7 +17,6 @@ func systemPomodoroClockReading(at wallDate: Date = Date()) -> PomodoroClockRead
         : nil
 
     return PomodoroClockReading(
-        wallDate: wallDate,
         bootIdentifier: bootIdentifier,
         continuousSeconds: continuousNanoseconds / 1_000_000_000
     )

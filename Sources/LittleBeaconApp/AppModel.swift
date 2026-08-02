@@ -38,6 +38,10 @@ func temporaryWindowText(startsAt: Date, durationMinutes: Int) -> String {
     return "\(temporaryStartText(startsAt))–\(formatter.string(from: endsAt))"
 }
 
+func shouldRunPomodoroRefreshHeartbeat(for phase: PomodoroBreakPhase) -> Bool {
+    phase.isActiveBreak
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published private(set) var snapshot: LocalSnapshot
@@ -65,6 +69,7 @@ final class AppModel: ObservableObject {
     private var pomodoroModeAtLastTick: PomodoroMode = .gentle
     private var monitorTimer: Timer?
     private var syncTimer: Timer?
+    private var pomodoroRefreshTimer: Timer?
     private var activeEventID: UUID?
     private var lastTick = Date()
     private var nextViewingDistanceCheckAt = Date.distantPast
@@ -112,6 +117,7 @@ final class AppModel: ObservableObject {
         }
         monitorTimer?.invalidate()
         syncTimer?.invalidate()
+        pomodoroRefreshTimer?.invalidate()
         KeychainStore.delete(role: snapshot.role)
         snapshot = LocalSnapshot()
         violationMachine = ViolationMachine()
@@ -409,6 +415,7 @@ final class AppModel: ObservableObject {
     private func startServices() {
         monitorTimer?.invalidate()
         syncTimer?.invalidate()
+        updatePomodoroRefreshHeartbeat(for: pomodoroBreakPhase)
         guard snapshot.role != .unconfigured else { return }
 
         if snapshot.role == .child && snapshot.monitoringEnabled {
@@ -425,6 +432,27 @@ final class AppModel: ObservableObject {
         syncTimer = timer
         RunLoop.main.add(timer, forMode: .common)
         Task { await syncNow() }
+    }
+
+    private func updatePomodoroRefreshHeartbeat(for phase: PomodoroBreakPhase) {
+        pomodoroRefreshTimer?.invalidate()
+        pomodoroRefreshTimer = nil
+        guard shouldRunPomodoroRefreshHeartbeat(for: phase) else { return }
+
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshActivePomodoroBreak() }
+        }
+        pomodoroRefreshTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func refreshActivePomodoroBreak(at date: Date = Date()) {
+        guard let coordinator = pomodoroBreakCoordinator, coordinator.isActiveBreak else { return }
+        do {
+            try coordinator.refresh(at: date)
+        } catch {
+            lastError = "番茄钟状态没有保存成功：\(error.localizedDescription)"
+        }
     }
 
     private func monitorTick() {
@@ -565,13 +593,15 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             self.pomodoroBreakPhase = phase
             ApplicationTerminationGate.shared.setBreakActive(phase.isActiveBreak)
+            self.updatePomodoroRefreshHeartbeat(for: phase)
         }
         coordinator.onError = { [weak self] error in
             self?.lastError = "番茄钟运行出现了问题：\(error.localizedDescription)"
         }
-        if let error = coordinator.lastError {
+        if let error = coordinator.lastPlaybackError {
             lastError = "番茄钟提醒出现了问题：\(error.localizedDescription)"
         }
+        updatePomodoroRefreshHeartbeat(for: coordinator.phase)
     }
 
     private func presentAlert(
