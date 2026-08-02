@@ -13,11 +13,15 @@ env \
   HOME="$CACHE/swift-home" \
   CLANG_MODULE_CACHE_PATH="$CACHE/clang-cache" \
   SWIFTPM_MODULECACHE_OVERRIDE="$CACHE/swiftpm-cache" \
-  swift build --configuration release --disable-sandbox --package-path "$ROOT"
+  swift build --configuration release --disable-sandbox \
+    --arch arm64 --arch x86_64 \
+    --package-path "$ROOT"
+
+BUILD_PRODUCTS="$ROOT/.build/apple/Products/Release"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
-cp "$ROOT/.build/release/LittleBeacon" "$APP/Contents/MacOS/LittleBeacon"
+cp "$BUILD_PRODUCTS/LittleBeacon" "$APP/Contents/MacOS/LittleBeacon"
 cp "$ROOT/packaging/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/branding/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP/Contents/Info.plist"
@@ -30,7 +34,7 @@ if [[ ! -d "$SPARKLE_FRAMEWORK" ]]; then
 fi
 ditto "$SPARKLE_FRAMEWORK" "$APP/Contents/Frameworks/Sparkle.framework"
 
-RESOURCE_BUNDLE="$ROOT/.build/release/LittleBeacon_LittleBeaconApp.bundle"
+RESOURCE_BUNDLE="$BUILD_PRODUCTS/LittleBeacon_LittleBeaconApp.bundle"
 if [[ -d "$RESOURCE_BUNDLE" ]]; then
   cp -R "$RESOURCE_BUNDLE" "$APP/Contents/Resources/"
 fi
@@ -40,6 +44,7 @@ codesign --force --deep --sign - "$APP/Contents/Frameworks/Sparkle.framework"
 codesign --force --deep --sign - "$APP"
 plutil -lint "$APP/Contents/Info.plist"
 codesign --verify --deep --strict "$APP"
+"$ROOT/scripts/verify-app-bundle.sh" "$APP"
 
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ROOT/outputs/LittleBeacon-macOS.zip"
 echo "$APP"
