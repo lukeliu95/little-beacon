@@ -40,7 +40,7 @@
 ./scripts/package-app.sh
 ```
 
-产物位于 `outputs/小灯塔.app` 和 `outputs/LittleBeacon-macOS.zip`。当前使用 ad-hoc 签名，适合家庭内手动测试；公开分发前仍需 Apple Developer ID 签名与公证。
+产物位于 `outputs/小灯塔.app` 和 `outputs/LittleBeacon-macOS.zip`。打包门禁要求最终 App 同时包含 Apple Silicon（arm64）和 Intel（x86_64），避免在另一种 Mac 上装出一枚很努力但打不开的图标。当前使用 ad-hoc 签名，适合家庭内手动测试；公开分发前仍需 Apple Developer ID 签名与公证。
 
 ## 在线更新与 GitHub 打包
 
