@@ -3,16 +3,30 @@ import Foundation
 import Sparkle
 
 @MainActor
+private final class UpdateLifecycleBridge: NSObject, SPUUpdaterDelegate {
+    func updater(
+        _ updater: SPUUpdater,
+        shouldPostponeRelaunchForUpdate item: SUAppcastItem,
+        untilInvokingBlock installHandler: @escaping () -> Void
+    ) -> Bool {
+        ApplicationTerminationGate.shared.postponeUpdateUntilBreakCompletes(installHandler)
+    }
+}
+
+@MainActor
 final class UpdateController: ObservableObject {
     @Published private(set) var canCheckForUpdates = false
 
     let updaterController: SPUStandardUpdaterController
+    private let lifecycleBridge: UpdateLifecycleBridge
     private var observation: AnyCancellable?
 
     init() {
+        let lifecycleBridge = UpdateLifecycleBridge()
+        self.lifecycleBridge = lifecycleBridge
         updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
-            updaterDelegate: nil,
+            updaterDelegate: lifecycleBridge,
             userDriverDelegate: nil
         )
         observation = updaterController.updater

@@ -776,11 +776,16 @@ private struct SettingsView: View {
 
                 VStack(alignment: .leading, spacing: 12) {
                     Text("孩子端提醒").font(.headline)
-                    Toggle("25 分钟护眼休息提醒（默认开启）", isOn: Binding(
-                        get: { model.rules.pomodoroEnabled },
-                        set: { model.setPomodoroEnabled($0) }
-                    ))
-                    Text("到点弹出温和提示，不锁屏、不阻止操作，孩子一键即可关闭。")
+                    Picker("25 分钟番茄钟", selection: Binding(
+                        get: { model.rules.pomodoroMode },
+                        set: { model.setPomodoroMode($0) }
+                    )) {
+                        Text("关闭").tag(PomodoroMode.off)
+                        Text("温和提醒").tag(PomodoroMode.gentle)
+                        Text("强制休息").tag(PomodoroMode.enforced)
+                    }
+                    .pickerStyle(.segmented)
+                    Text(pomodoroExplanation)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Divider()
@@ -860,6 +865,17 @@ private struct SettingsView: View {
         .navigationTitle("设置")
         .onAppear { baseURL = model.snapshot.apiBaseURL }
     }
+
+    private var pomodoroExplanation: String {
+        switch model.rules.pomodoroMode {
+        case .off:
+            return "不计算连续使用时间，也不显示休息提醒。"
+        case .gentle:
+            return "连续使用 25 分钟后温和提醒；孩子可以立刻关闭。"
+        case .enforced:
+            return "连续使用 25 分钟后遮住所有屏幕并响铃。必须先确认，再休息满 5 分钟，关闭按钮才会出现。"
+        }
+    }
 }
 
 private struct ChildRuleSummary: View {
@@ -883,6 +899,13 @@ private struct ChildRuleSummary: View {
                     Text(summary(for: category)).foregroundStyle(.secondary)
                 }
             }
+            HStack {
+                Image(systemName: "timer")
+                    .foregroundStyle(.indigo)
+                Text("25 分钟番茄钟")
+                Spacer()
+                Text(pomodoroSummary).foregroundStyle(.secondary)
+            }
         }
         .cardStyle()
     }
@@ -898,6 +921,14 @@ private struct ChildRuleSummary: View {
             .filter { $0.weekday == weekday } ?? []
         guard !windows.isEmpty else { return "今天没有允许时段" }
         return windows.map { "\(time($0.startMinute))–\(time($0.endMinute))" }.joined(separator: "，")
+    }
+
+    private var pomodoroSummary: String {
+        switch rules.pomodoroMode {
+        case .off: "关闭"
+        case .gentle: "温和提醒"
+        case .enforced: "强制休息 5 分钟"
+        }
     }
 
     private func time(_ minute: Int) -> String {

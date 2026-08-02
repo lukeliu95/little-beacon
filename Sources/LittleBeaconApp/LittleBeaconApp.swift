@@ -1,8 +1,10 @@
+import AppKit
 import SwiftUI
 import LittleBeaconCore
 
 @main
 struct LittleBeaconApp: App {
+    @NSApplicationDelegateAdaptor(ApplicationLifecycleController.self) private var appDelegate
     @StateObject private var model = AppModel()
     @StateObject private var updates = UpdateController()
 
@@ -16,6 +18,18 @@ struct LittleBeaconApp: App {
             CommandGroup(after: .appInfo) {
                 Button("检查更新…") { updates.checkForUpdates() }
                     .disabled(!updates.canCheckForUpdates)
+            }
+            CommandGroup(replacing: .appVisibility) {
+                if model.role != .child {
+                    Button("隐藏小灯塔") { NSApp.hide(nil) }
+                        .keyboardShortcut("h")
+                }
+            }
+            CommandGroup(replacing: .appTermination) {
+                if model.role != .child {
+                    Button("退出小灯塔") { NSApp.terminate(nil) }
+                        .keyboardShortcut("q")
+                }
             }
         }
 
