@@ -64,6 +64,30 @@ final class BreakShieldWindowController: NSObject, BreakShieldPresenting, NSWind
 
     func windowShouldClose(_ sender: NSWindow) -> Bool { false }
 
+#if DEBUG
+    struct PanelContract: Equatable {
+        var level: Int
+        var isBorderless: Bool
+        var hasCloseButton: Bool
+        var joinsAllSpaces: Bool
+        var supportsFullScreenAuxiliary: Bool
+        var hidesOnDeactivate: Bool
+    }
+
+    var panelContractsForTesting: [PanelContract] {
+        panels.map { panel in
+            PanelContract(
+                level: panel.level.rawValue,
+                isBorderless: panel.styleMask.contains(.borderless),
+                hasCloseButton: panel.standardWindowButton(.closeButton) != nil,
+                joinsAllSpaces: panel.collectionBehavior.contains(.canJoinAllSpaces),
+                supportsFullScreenAuxiliary: panel.collectionBehavior.contains(.fullScreenAuxiliary),
+                hidesOnDeactivate: panel.hidesOnDeactivate
+            )
+        }
+    }
+#endif
+
     private func rebuildPanels() {
         panels.forEach { $0.orderOut(nil) }
         panels = NSScreen.screens.enumerated().map { index, screen in

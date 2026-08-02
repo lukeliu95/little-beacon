@@ -95,6 +95,10 @@ final class AppModel: ObservableObject {
     }
 
     func configure(role: DeviceRole) {
+        guard pomodoroBreakCoordinator?.isActiveBreak != true else {
+            lastError = "强制休息进行中，完成休息后才能改变这台 Mac 的角色。"
+            return
+        }
         snapshot.role = role
         persist()
         configurePomodoroCoordinator()
@@ -113,7 +117,7 @@ final class AppModel: ObservableObject {
         violationMachine = ViolationMachine()
         pomodoroTimer = PomodoroTimer()
         try? pomodoroBreakCoordinator?.resetCounting()
-        ApplicationTerminationGate.shared.blocksTermination = false
+        ApplicationTerminationGate.shared.setBreakActive(false)
         nextViewingDistanceCheckAt = .distantPast
         viewingDistanceWarningStage = 0
         warningMessage = nil
@@ -437,8 +441,6 @@ final class AppModel: ObservableObject {
         if !breakWasActive && breakIsActive {
             warningMessage = nil
             activeAlert = nil
-            activeEventID = nil
-            violationMachine = ViolationMachine()
         }
         let isEffectivelyIdle = isIdle || breakIsActive
 
@@ -455,7 +457,15 @@ final class AppModel: ObservableObject {
             dailyUsageSeconds: snapshot.dailyUsage.activeSeconds
         )
 
-        if !breakIsActive {
+        if breakIsActive {
+            let actions = violationMachine.advance(
+                activity: ClassifiedActivity(observation: .idle, category: .idle),
+                isAllowed: true,
+                elapsedSeconds: delta,
+                at: now
+            )
+            process(actions: actions, now: now)
+        } else {
             let allowed = evaluator.isAllowed(
                 category: activity.category,
                 at: now,
@@ -526,7 +536,6 @@ final class AppModel: ObservableObject {
 
     private func configurePomodoroCoordinator() {
         let sessionStore = PomodoroSessionStore()
-        let initialMachine: PomodoroBreakMachine? = snapshot.role == .child ? nil : PomodoroBreakMachine()
         let shield = BreakShieldWindowController()
         let alarm = BreakAlarmController()
 
@@ -534,8 +543,7 @@ final class AppModel: ObservableObject {
             pomodoroBreakCoordinator = try PomodoroBreakCoordinator(
                 store: sessionStore,
                 shield: shield,
-                alarm: alarm,
-                initialMachine: initialMachine
+                alarm: alarm
             )
         } catch {
             lastError = "番茄钟记录损坏，已从安全的空白状态恢复：\(error.localizedDescription)"
@@ -548,18 +556,21 @@ final class AppModel: ObservableObject {
         }
 
         guard let coordinator = pomodoroBreakCoordinator else {
-            ApplicationTerminationGate.shared.blocksTermination = false
+            ApplicationTerminationGate.shared.setBreakActive(false)
             return
         }
         pomodoroBreakPhase = coordinator.phase
-        ApplicationTerminationGate.shared.blocksTermination = snapshot.role == .child && coordinator.isActiveBreak
+        ApplicationTerminationGate.shared.setBreakActive(coordinator.isActiveBreak)
         coordinator.onPhaseChange = { [weak self] phase in
             guard let self else { return }
             self.pomodoroBreakPhase = phase
-            ApplicationTerminationGate.shared.blocksTermination = self.snapshot.role == .child && phase.isActiveBreak
+            ApplicationTerminationGate.shared.setBreakActive(phase.isActiveBreak)
         }
         coordinator.onError = { [weak self] error in
-            self?.lastError = "番茄钟状态没有保存成功：\(error.localizedDescription)"
+            self?.lastError = "番茄钟运行出现了问题：\(error.localizedDescription)"
+        }
+        if let error = coordinator.lastError {
+            lastError = "番茄钟提醒出现了问题：\(error.localizedDescription)"
         }
     }
 

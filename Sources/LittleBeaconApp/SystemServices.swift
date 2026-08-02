@@ -4,6 +4,20 @@ import Foundation
 import ServiceManagement
 import UserNotifications
 
+enum BreakAlarmError: LocalizedError {
+    case resourceUnavailable(String)
+    case playbackFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .resourceUnavailable(name):
+            "找不到内置番茄钟声音：\(name)"
+        case let .playbackFailed(name):
+            "番茄钟声音播放失败：\(name)"
+        }
+    }
+}
+
 enum SoundService {
     /// Plays an attention-getting sound for on-screen alerts (warnings, break reminders,
     /// daily-usage nudges). Additive to `NotificationService.post`, which already plays the
@@ -35,6 +49,8 @@ enum SoundService {
 /// repeating alarm immediately after acknowledgement.
 @MainActor
 final class BreakAlarmController: BreakAlarmPlaying {
+    var onPlaybackError: ((Error) -> Void)?
+
     static var hasBundledResources: Bool {
         Bundle.module.url(forResource: "pomodoro-alarm", withExtension: "wav") != nil
             && Bundle.module.url(forResource: "pomodoro-complete", withExtension: "wav") != nil
@@ -46,12 +62,12 @@ final class BreakAlarmController: BreakAlarmPlaying {
 
     func startWaitingAlarm() {
         stopWaitingAlarm()
-        play(attentionPlayer)
+        play(attentionPlayer, named: "pomodoro-alarm")
 
         let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.play(self.attentionPlayer)
+                self.play(self.attentionPlayer, named: "pomodoro-alarm")
             }
         }
         repeatTimer = timer
@@ -66,16 +82,20 @@ final class BreakAlarmController: BreakAlarmPlaying {
     }
 
     func playCompletion() {
-        play(completionPlayer)
+        play(completionPlayer, named: "pomodoro-complete")
     }
 
-    private func play(_ player: AVAudioPlayer?) {
-        if let player {
-            player.stop()
-            player.currentTime = 0
-            player.play()
-        } else {
+    private func play(_ player: AVAudioPlayer?, named name: String) {
+        guard let player else {
             NSSound.beep()
+            onPlaybackError?(BreakAlarmError.resourceUnavailable(name))
+            return
+        }
+        player.stop()
+        player.currentTime = 0
+        if !player.play() {
+            NSSound.beep()
+            onPlaybackError?(BreakAlarmError.playbackFailed(name))
         }
     }
 

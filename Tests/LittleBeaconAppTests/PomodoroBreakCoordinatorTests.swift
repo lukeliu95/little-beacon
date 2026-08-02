@@ -47,6 +47,51 @@ import Testing
     #expect(alarm.completionPlayCount == 1)
 }
 
+@MainActor
+@Test func restoredWaitingBreakImmediatelyRebuildsShieldAndAlarm() throws {
+    let triggeredAt = Date(timeIntervalSince1970: 1_800_000_000)
+    let store = RecordingPomodoroStore(machineToLoad: PomodoroBreakMachine(
+        phase: .awaitingAcknowledgement(triggeredAt: triggeredAt)
+    ))
+    let shield = RecordingBreakShield()
+    let alarm = RecordingBreakAlarm()
+
+    let coordinator = try PomodoroBreakCoordinator(
+        store: store,
+        shield: shield,
+        alarm: alarm,
+        now: triggeredAt.addingTimeInterval(600)
+    )
+
+    #expect(coordinator.phase == .awaitingAcknowledgement(triggeredAt: triggeredAt))
+    #expect(shield.presentedPhase == coordinator.phase)
+    #expect(alarm.isWaitingAlarmActive)
+}
+
+@MainActor
+@Test func alarmPlaybackFailureIsReportedWithoutDismissingTheShield() throws {
+    let store = RecordingPomodoroStore()
+    let shield = RecordingBreakShield()
+    let alarm = RecordingBreakAlarm()
+    alarm.errorOnStart = TestAlarmError.failed
+    let coordinator = try PomodoroBreakCoordinator(store: store, shield: shield, alarm: alarm)
+    var reportedError: Error?
+    coordinator.onError = { reportedError = $0 }
+
+    try coordinator.advance(
+        isIdle: false,
+        elapsedSeconds: PomodoroBreakMachine.workThreshold,
+        at: Date(timeIntervalSince1970: 1_800_000_000)
+    )
+
+    #expect(reportedError != nil)
+    #expect(shield.presentedPhase?.isActiveBreak == true)
+}
+
+private enum TestAlarmError: Error {
+    case failed
+}
+
 private final class RecordingPomodoroStore: PomodoroSessionPersisting {
     var savedMachines: [PomodoroBreakMachine] = []
     var machineToLoad = PomodoroBreakMachine()
@@ -77,10 +122,15 @@ private final class RecordingBreakShield: BreakShieldPresenting {
 
 @MainActor
 private final class RecordingBreakAlarm: BreakAlarmPlaying {
+    var onPlaybackError: ((Error) -> Void)?
     var isWaitingAlarmActive = false
     var completionPlayCount = 0
+    var errorOnStart: Error?
 
-    func startWaitingAlarm() { isWaitingAlarmActive = true }
+    func startWaitingAlarm() {
+        isWaitingAlarmActive = true
+        if let errorOnStart { onPlaybackError?(errorOnStart) }
+    }
     func stopWaitingAlarm() { isWaitingAlarmActive = false }
     func playCompletion() { completionPlayCount += 1 }
 }

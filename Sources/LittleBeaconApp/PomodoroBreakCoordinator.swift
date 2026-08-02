@@ -14,6 +14,7 @@ protocol BreakShieldPresenting: AnyObject {
 
 @MainActor
 protocol BreakAlarmPlaying: AnyObject {
+    var onPlaybackError: ((Error) -> Void)? { get set }
     func startWaitingAlarm()
     func stopWaitingAlarm()
     func playCompletion()
@@ -24,28 +25,35 @@ final class PomodoroBreakCoordinator {
     private let store: PomodoroSessionPersisting
     private let shield: BreakShieldPresenting
     private let alarm: BreakAlarmPlaying
+    private let clockReading: (Date) -> PomodoroClockReading
     private var machine: PomodoroBreakMachine
     private var lastCountingSaveAt = Date.distantPast
 
     var onPhaseChange: ((PomodoroBreakPhase) -> Void)?
     var onError: ((Error) -> Void)?
+    private(set) var lastError: Error?
 
     init(
         store: PomodoroSessionPersisting,
         shield: BreakShieldPresenting,
         alarm: BreakAlarmPlaying,
         initialMachine: PomodoroBreakMachine? = nil,
+        clockReading: @escaping (Date) -> PomodoroClockReading = systemPomodoroClockReading,
         now: Date = Date()
     ) throws {
         self.store = store
         self.shield = shield
         self.alarm = alarm
+        self.clockReading = clockReading
         var restored = try initialMachine ?? store.load()
-        let becameReadyWhileAway = restored.refresh(at: now) != nil
+        let becameReadyWhileAway = restored.refresh(at: now, clockReading: clockReading(now)) != nil
         if becameReadyWhileAway {
             try store.save(restored)
         }
         machine = restored
+        alarm.onPlaybackError = { [weak self] error in
+            self?.record(error)
+        }
         restorePresentation()
         if becameReadyWhileAway {
             alarm.playCompletion()
@@ -81,7 +89,7 @@ final class PomodoroBreakCoordinator {
 
     func acknowledge(at date: Date = Date()) throws {
         var proposed = machine
-        guard proposed.acknowledge(at: date) == .acknowledged else { return }
+        guard proposed.acknowledge(at: date, clockReading: clockReading(date)) == .acknowledged else { return }
         try store.save(proposed)
         machine = proposed
         alarm.stopWaitingAlarm()
@@ -91,7 +99,7 @@ final class PomodoroBreakCoordinator {
 
     func refresh(at date: Date = Date()) throws {
         var proposed = machine
-        guard proposed.refresh(at: date) == .closeBecameAvailable else { return }
+        guard proposed.refresh(at: date, clockReading: clockReading(date)) == .closeBecameAvailable else { return }
         try store.save(proposed)
         machine = proposed
         shield.update(phase: machine.phase)
@@ -144,5 +152,10 @@ final class PomodoroBreakCoordinator {
         } catch {
             onError?(error)
         }
+    }
+
+    private func record(_ error: Error) {
+        lastError = error
+        onError?(error)
     }
 }
