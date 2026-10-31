@@ -47,7 +47,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var snapshot: LocalSnapshot
     @Published private(set) var currentActivity = ClassifiedActivity(observation: .idle, category: .idle)
     @Published var warningMessage: String?
-    @Published var activeAlert: ChildAlert?
+    @Published var activeAlert: ChildAlert? {
+        didSet { presentActiveAlert() }
+    }
     @Published var connectionMessage = "本地模式"
     @Published var pairingCode: String?
     @Published var pairingCodeExpiresAt: Date?
@@ -63,6 +65,8 @@ final class AppModel: ObservableObject {
     private let evaluator = RuleEvaluator()
     private let activityMonitor = ActivityMonitor()
     private let viewingDistanceMonitor = ViewingDistanceMonitor()
+    private let alertPanel = ChildAlertPanelController()
+    private let presence = ApplicationPresenceController()
     private var violationMachine = ViolationMachine()
     private var pomodoroTimer = PomodoroTimer()
     private var pomodoroBreakCoordinator: PomodoroBreakCoordinator?
@@ -74,10 +78,12 @@ final class AppModel: ObservableObject {
     private var lastTick = Date()
     private var nextViewingDistanceCheckAt = Date.distantPast
     private var viewingDistanceWarningStage = 0
+    private var backgroundLaunchIsPending = true
 
     init() {
         snapshot = store.load()
         pomodoroModeAtLastTick = snapshot.rules.pomodoroMode
+        applyPresence()
         configurePomodoroCoordinator()
         NotificationService.requestAuthorization()
         autoStartMessage = AutoStartManager.registerIfPossible()
@@ -106,8 +112,16 @@ final class AppModel: ObservableObject {
         }
         snapshot.role = role
         persist()
+        applyPresence()
         configurePomodoroCoordinator()
         startServices()
+    }
+
+    /// True once per launch, for the window SwiftUI opens by itself on a paired child Mac.
+    func consumeBackgroundLaunch() -> Bool {
+        defer { backgroundLaunchIsPending = false }
+        return backgroundLaunchIsPending
+            && runsInBackground(role: snapshot.role, isPaired: snapshot.householdID != nil)
     }
 
     func resetConfiguration() {
@@ -132,6 +146,7 @@ final class AppModel: ObservableObject {
         pairingCode = nil
         refreshViewingDistanceStatus()
         persist()
+        applyPresence()
     }
 
     func updateAPIBaseURL(_ value: String) {
@@ -161,6 +176,8 @@ final class AppModel: ObservableObject {
             self.snapshot.householdID = response.householdID
             self.snapshot.deviceID = response.deviceID
             self.persist()
+            self.applyPresence()
+            NSApp.activate(ignoringOtherApps: true)
             self.connectionMessage = "孩子端已配对"
             await self.syncNow()
         }
@@ -602,6 +619,18 @@ final class AppModel: ObservableObject {
             lastError = "番茄钟提醒出现了问题：\(error.localizedDescription)"
         }
         updatePomodoroRefreshHeartbeat(for: coordinator.phase)
+    }
+
+    private func applyPresence() {
+        presence.apply(role: snapshot.role, isPaired: snapshot.householdID != nil)
+    }
+
+    private func presentActiveAlert() {
+        guard let activeAlert else {
+            alertPanel.hide()
+            return
+        }
+        alertPanel.show(activeAlert) { [weak self] in self?.activeAlert = nil }
     }
 
     private func presentAlert(
