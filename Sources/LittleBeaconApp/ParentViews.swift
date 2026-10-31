@@ -342,6 +342,10 @@ private struct PendingRequestBand: View {
 struct DayAxis: Equatable {
     let startHour: Int
 
+    init(startHour: Int) {
+        self.startHour = startHour
+    }
+
     init(spans: [DaySpan]) {
         let earliest = spans.map(\.startMinute).min() ?? 6 * 60
         startHour = min(6, earliest / 60)
@@ -550,180 +554,393 @@ private struct RulesView: View {
     }
 }
 
+/// A drag in progress. Rules only change when the pointer lets go, so one drag uploads once.
+private struct ScheduleDraft: Equatable {
+    let weekday: Int
+    let slot: DaySlot
+}
+
 private struct WeekScheduleView: View {
     @ObservedObject var model: AppModel
     @State private var category: ActivityCategory = .game
     @State private var weekday = Calendar.current.component(.weekday, from: Date())
+    @State private var selectedSlotID: UUID?
+    @State private var draft: ScheduleDraft?
+    @State private var appliedMessage: String?
 
     private static let days = [(2, "周一"), (3, "周二"), (4, "周三"), (5, "周四"), (6, "周五"), (7, "周六"), (1, "周日")]
-    private static let defaultWindow = (startMinute: 18 * 60, endMinute: 20 * 60)
+    private static let axis = DayAxis(startHour: 0)
 
-    private var windows: [ScheduleWindow] {
-        model.rules.activityRules.first { $0.category == category }?.windows ?? []
+    private func schedule(for day: Int) -> DaySchedule {
+        model.rules.daySchedule(for: category, weekday: day)
     }
 
-    private var axis: DayAxis {
-        DayAxis(spans: windows.map { DaySpan(startMinute: $0.startMinute, endMinute: $0.endMinute) })
+    private var selectedSlot: DaySlot? {
+        if let draft, draft.weekday == weekday { return draft.slot }
+        let schedule = schedule(for: weekday)
+        return selectedSlotID.flatMap(schedule.slot(id:)) ?? schedule.slots.first
     }
 
-    private var selectedWindows: [ScheduleWindow] {
-        windows.filter { $0.weekday == weekday }
+    private var dayName: String {
+        Self.days.first { $0.0 == weekday }?.1 ?? ""
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 ForEach([ActivityCategory.game, .video]) { item in
-                    Button(item.displayName) { category = item }
-                        .buttonStyle(BeaconButtonStyle(kind: item == category ? .primary : .quiet))
+                    Button(item.displayName) {
+                        category = item
+                        selectedSlotID = nil
+                        appliedMessage = nil
+                    }
+                    .buttonStyle(BeaconButtonStyle(kind: item == category ? .primary : .quiet))
                 }
                 Spacer()
-                Text("亮起来的时段可以\(category == .game ? "玩游戏" : "看视频")，其他时间不可以")
+                Text("拖动时段可移动，拖两端改时长，空白处拖动可添加")
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
             }
             VStack(spacing: 6) {
                 HStack(spacing: 12) {
                     Color.clear.frame(width: 40, height: 1)
-                    TimeTicks(axis: axis, hours: [axis.startHour, 12, 18, 24])
+                    TimeTicks(axis: Self.axis, hours: [0, 6, 12, 18, 24])
                 }
                 ForEach(Self.days, id: \.0) { day, name in
                     HStack(spacing: 12) {
                         Text(name)
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 14, weight: day == weekday ? .semibold : .regular))
+                            .foregroundStyle(day == weekday ? .primary : .secondary)
                             .frame(width: 40, alignment: .leading)
                         ScheduleLane(
                             name: name,
-                            windows: windows.filter { $0.weekday == day },
-                            axis: axis,
-                            isSelected: day == weekday,
-                            select: { weekday = day },
-                            addDefault: {
+                            schedule: schedule(for: day),
+                            axis: Self.axis,
+                            draft: draft?.weekday == day ? draft?.slot : nil,
+                            selectedSlotID: day == weekday ? selectedSlot?.id : nil,
+                            select: { slotID in
                                 weekday = day
-                                model.setWindow(
-                                    category: category,
-                                    weekdays: [day],
-                                    startMinute: Self.defaultWindow.startMinute,
-                                    endMinute: Self.defaultWindow.endMinute
-                                )
-                            }
+                                selectedSlotID = slotID
+                                appliedMessage = nil
+                            },
+                            preview: { slot in
+                                draft = ScheduleDraft(weekday: day, slot: slot)
+                            },
+                            commit: commitDraft
                         )
                     }
                 }
             }
             ScheduleEditor(
-                model: model,
-                category: category,
-                weekday: weekday,
-                dayName: Self.days.first { $0.0 == weekday }?.1 ?? "",
-                windows: selectedWindows
+                dayName: dayName,
+                schedule: schedule(for: weekday),
+                slot: selectedSlot,
+                appliedMessage: appliedMessage,
+                save: save,
+                add: addSlot,
+                remove: removeSelectedSlot,
+                apply: applyDay
             )
-            .id("\(category.rawValue)-\(weekday)-\(selectedWindows.first?.id.uuidString ?? "none")")
+            .id("\(category.rawValue)-\(weekday)-\(selectedSlot?.id.uuidString ?? "none")")
+        }
+    }
+
+    private func commitDraft() {
+        guard let draft else { return }
+        self.draft = nil
+        weekday = draft.weekday
+        selectedSlotID = draft.slot.id
+        appliedMessage = nil
+        model.setSchedule(
+            schedule(for: draft.weekday).applying(draft.slot),
+            category: category,
+            weekday: draft.weekday
+        )
+    }
+
+    private func save(_ slot: DaySlot) {
+        model.setSchedule(schedule(for: weekday).applying(slot), category: category, weekday: weekday)
+    }
+
+    private func addSlot() {
+        guard let slot = schedule(for: weekday).suggestedSlot() else { return }
+        selectedSlotID = slot.id
+        appliedMessage = nil
+        save(slot)
+    }
+
+    private func removeSelectedSlot() {
+        guard let slot = selectedSlot else { return }
+        selectedSlotID = nil
+        appliedMessage = nil
+        model.setSchedule(schedule(for: weekday).removing(id: slot.id), category: category, weekday: weekday)
+    }
+
+    private func applyDay(to target: ScheduleCopyTarget) {
+        model.copySchedule(category: category, from: weekday, to: target.weekdays)
+        appliedMessage = "已把\(dayName)的时段应用到\(target.rawValue)"
+    }
+}
+
+private enum ScheduleCopyTarget: String, CaseIterable, Identifiable {
+    case workdays = "工作日"
+    case weekend = "周末"
+    case everyDay = "每天"
+
+    var id: String { rawValue }
+    var weekdays: [Int] {
+        switch self {
+        case .workdays: Array(2...6)
+        case .weekend: [7, 1]
+        case .everyDay: Array(1...7)
         }
     }
 }
 
 private struct ScheduleLane: View {
     let name: String
-    let windows: [ScheduleWindow]
+    let schedule: DaySchedule
     let axis: DayAxis
-    let isSelected: Bool
-    let select: () -> Void
-    let addDefault: () -> Void
+    let draft: DaySlot?
+    let selectedSlotID: UUID?
+    let select: (UUID?) -> Void
+    let preview: (DaySlot) -> Void
+    let commit: () -> Void
+    @State private var drawnID = UUID()
+
+    static let coordinateSpace = "schedule-lane"
+
+    private var displayedSlots: [DaySlot] {
+        draft.map { schedule.applying($0).slots } ?? schedule.slots
+    }
 
     var body: some View {
         GeometryReader { proxy in
+            let width = proxy.size.width
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 6).fill(BeaconStyle.trackFill)
-                if windows.isEmpty {
-                    Button(action: addDefault) {
-                        Text("不开放，点击添加")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(name)不开放，点击添加时段")
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(BeaconStyle.trackFill)
+                    .contentShape(Rectangle())
+                    .gesture(drawGesture(width: width))
+                    .accessibilityHidden(true)
+                if displayedSlots.isEmpty {
+                    Text("这天不开放，拖动添加时段")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .allowsHitTesting(false)
                 }
-                ForEach(windows) { window in
-                    let start = axis.fraction(window.startMinute)
-                    let width = proxy.size.width * (axis.fraction(window.endMinute) - start)
-                    Button(action: select) {
-                        Text(width >= 48 ? spanText(window) : "")
-                            .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                            .foregroundStyle(.black)
-                            .lineLimit(1)
-                            .frame(width: width, height: proxy.size.height)
-                            .background(BeaconStyle.lamp, in: RoundedRectangle(cornerRadius: 6))
-                            .overlay {
-                                if isSelected {
-                                    RoundedRectangle(cornerRadius: 7)
-                                        .stroke(.primary, lineWidth: 2)
-                                        .padding(-1)
-                                }
-                            }
-                    }
-                    .buttonStyle(.plain)
-                    .offset(x: proxy.size.width * start)
-                    .accessibilityLabel("\(name) \(clockText(window.startMinute)) 到 \(clockText(window.endMinute))，点击编辑")
+                ForEach(displayedSlots) { slot in
+                    ScheduleSlotView(
+                        name: name,
+                        slot: slot,
+                        base: schedule.slot(id: slot.id),
+                        schedule: schedule,
+                        axis: axis,
+                        laneWidth: width,
+                        isSelected: slot.id == selectedSlotID,
+                        select: { select(slot.id) },
+                        preview: preview,
+                        commit: commit
+                    )
                 }
             }
+            .coordinateSpace(name: Self.coordinateSpace)
         }
         .frame(height: 32)
     }
 
-    private func spanText(_ window: ScheduleWindow) -> String {
-        guard window.startMinute % 60 == 0, window.endMinute % 60 == 0 else {
-            return "\(clockText(window.startMinute))–\(clockText(window.endMinute))"
+    private func drawGesture(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.coordinateSpace))
+            .onChanged { value in
+                guard abs(value.translation.width) >= 4 else {
+                    select(nil)
+                    return
+                }
+                let drawn = schedule.drawnSlot(
+                    id: drawnID,
+                    from: minute(at: value.startLocation.x, width: width),
+                    to: minute(at: value.location.x, width: width)
+                )
+                if let drawn { preview(drawn) }
+            }
+            .onEnded { _ in
+                drawnID = UUID()
+                commit()
+            }
+    }
+
+    private func minute(at x: CGFloat, width: CGFloat) -> Int {
+        Int(min(1, max(0, x / width)) * Double(DaySchedule.dayMinutes))
+    }
+}
+
+private struct ScheduleSlotView: View {
+    let name: String
+    let slot: DaySlot
+    let base: DaySlot?
+    let schedule: DaySchedule
+    let axis: DayAxis
+    let laneWidth: CGFloat
+    let isSelected: Bool
+    let select: () -> Void
+    let preview: (DaySlot) -> Void
+    let commit: () -> Void
+
+    private enum DragEdge {
+        case start
+        case end
+    }
+
+    private var width: CGFloat {
+        laneWidth * (axis.fraction(slot.endMinute) - axis.fraction(slot.startMinute))
+    }
+
+    private var handleWidth: CGFloat {
+        width < 28 ? 5 : 8
+    }
+
+    var body: some View {
+        ZStack {
+            Text(label)
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .foregroundStyle(.black)
+                .lineLimit(1)
+                .frame(width: width, height: 32)
+                .background(BeaconStyle.lamp, in: RoundedRectangle(cornerRadius: 6))
+                .overlay {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 7)
+                            .stroke(.primary, lineWidth: 2)
+                            .padding(-1)
+                    }
+                }
+                .contentShape(Rectangle())
+                .gesture(moveGesture)
+                .pointer(.openHand)
+            HStack(spacing: 0) {
+                edgeHandle(.start)
+                Spacer(minLength: 0)
+                edgeHandle(.end)
+            }
         }
-        return "\(window.startMinute / 60)–\(window.endMinute / 60) 点"
+        .frame(width: width, height: 32)
+        .offset(x: laneWidth * axis.fraction(slot.startMinute))
+        .accessibilityElement()
+        .accessibilityLabel("\(name) \(clockText(slot.startMinute)) 到 \(clockText(slot.endMinute))")
+        .accessibilityHint("可以在下方修改时间")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { select() }
+    }
+
+    private var label: String {
+        if width >= 86 {
+            return "\(clockText(slot.startMinute))–\(clockText(slot.endMinute))"
+        }
+        let isOnTheHour = slot.startMinute % 60 == 0 && slot.endMinute % 60 == 0
+        return isOnTheHour && width >= 40 ? "\(slot.startMinute / 60)–\(slot.endMinute / 60)" : ""
+    }
+
+    private func edgeHandle(_ edge: DragEdge) -> some View {
+        Color.clear
+            .frame(width: handleWidth, height: 32)
+            .contentShape(Rectangle())
+            .gesture(resizeGesture(edge))
+            .pointer(.resizeLeftRight)
+    }
+
+    private var minutesPerPoint: Double {
+        Double(DaySchedule.dayMinutes) / Double(laneWidth)
+    }
+
+    private var moveGesture: some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named(ScheduleLane.coordinateSpace))
+            .onChanged { value in
+                select()
+                guard let base, abs(value.translation.width) >= 3 else { return }
+                preview(schedule.moved(base, byMinutes: Int(value.translation.width * minutesPerPoint)))
+            }
+            .onEnded { _ in commit() }
+    }
+
+    private func resizeGesture(_ edge: DragEdge) -> some Gesture {
+        DragGesture(minimumDistance: 1, coordinateSpace: .named(ScheduleLane.coordinateSpace))
+            .onChanged { value in
+                select()
+                guard let base else { return }
+                let delta = Int(value.translation.width * minutesPerPoint)
+                switch edge {
+                case .start: preview(schedule.resizedStart(base, toMinute: base.startMinute + delta))
+                case .end: preview(schedule.resizedEnd(base, toMinute: base.endMinute + delta))
+                }
+            }
+            .onEnded { _ in commit() }
+    }
+}
+
+private extension View {
+    func pointer(_ cursor: NSCursor) -> some View {
+        onHover { isInside in
+            if isInside {
+                cursor.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
     }
 }
 
 private struct ScheduleEditor: View {
-    @ObservedObject var model: AppModel
-    let category: ActivityCategory
-    let weekday: Int
     let dayName: String
-    let windows: [ScheduleWindow]
+    let schedule: DaySchedule
+    let slot: DaySlot?
+    let appliedMessage: String?
+    let save: (DaySlot) -> Void
+    let add: () -> Void
+    let remove: () -> Void
+    let apply: (ScheduleCopyTarget) -> Void
     @State private var start = Date()
     @State private var end = Date()
-    @State private var isInvalid = false
-
-    private static let workdays = Array(2...6)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 16) {
                 Text(dayName).font(.system(size: 14, weight: .semibold))
-                if windows.isEmpty {
-                    Text("这天不开放，点上面的空行可以添加时段")
+                if slot == nil {
+                    Text("这天不开放")
                         .font(.system(size: 14))
                         .foregroundStyle(.secondary)
-                    Spacer()
                 } else {
-                    timeField("开始", selection: $start)
-                    timeField("结束", selection: $end)
-                    Spacer()
-                    Button("应用到工作日") {
-                        apply(to: Self.workdays)
+                    timeField("开始", selection: $start) { minute in
+                        slot.map { schedule.resizedStart($0, toMinute: minute, snapping: false) }
                     }
-                    .buttonStyle(BeaconButtonStyle())
-                    Button("这天不开放") {
-                        model.clearWindows(category: category, weekday: weekday)
+                    timeField("结束", selection: $end) { minute in
+                        slot.map { schedule.resizedEnd($0, toMinute: minute, snapping: false) }
                     }
-                    .buttonStyle(BeaconButtonStyle())
                 }
+                Spacer()
+                if slot != nil {
+                    Button("删除这段", action: remove)
+                        .buttonStyle(BeaconButtonStyle())
+                }
+                Button("添加时段", action: add)
+                    .buttonStyle(BeaconButtonStyle())
+                    .disabled(schedule.suggestedSlot() == nil)
+                Menu("应用到…") {
+                    ForEach(ScheduleCopyTarget.allCases) { target in
+                        Button(target.rawValue) { apply(target) }
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .font(.system(size: 14))
+                .fixedSize()
+                .padding(.horizontal, 14)
+                .frame(minHeight: 32)
+                .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
             }
-            if isInvalid {
-                Text("结束时间要晚于开始时间，这次修改没有保存")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            }
-            if windows.count > 1 {
-                Text("这天原来有 \(windows.count) 段时段，修改后会合并成一段")
+            if let appliedMessage {
+                Text(appliedMessage)
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
             }
@@ -732,14 +949,15 @@ private struct ScheduleEditor: View {
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(BeaconStyle.groupFill, in: RoundedRectangle(cornerRadius: 12))
-        .onAppear {
-            guard let window = windows.first else { return }
-            start = Self.date(from: window.startMinute)
-            end = Self.date(from: window.endMinute)
-        }
+        .onAppear(perform: loadTimes)
+        .onChange(of: slot) { _, _ in loadTimes() }
     }
 
-    private func timeField(_ label: String, selection: Binding<Date>) -> some View {
+    private func timeField(
+        _ label: String,
+        selection: Binding<Date>,
+        proposal: @escaping (Int) -> DaySlot?
+    ) -> some View {
         HStack(spacing: 6) {
             Text(label).font(.system(size: 14)).foregroundStyle(.secondary)
             DatePicker(
@@ -748,7 +966,12 @@ private struct ScheduleEditor: View {
                     get: { selection.wrappedValue },
                     set: { value in
                         selection.wrappedValue = value
-                        apply(to: [weekday])
+                        guard let proposed = proposal(Self.minutes(from: value)) else { return }
+                        if proposed == slot {
+                            loadTimes()
+                        } else {
+                            save(proposed)
+                        }
                     }
                 ),
                 displayedComponents: .hourAndMinute
@@ -757,16 +980,16 @@ private struct ScheduleEditor: View {
         }
     }
 
-    private func apply(to weekdays: [Int]) {
-        let startMinute = Self.minutes(from: start)
-        let endMinute = Self.minutes(from: end)
-        isInvalid = endMinute <= startMinute
-        guard !isInvalid else { return }
-        model.setWindow(category: category, weekdays: weekdays, startMinute: startMinute, endMinute: endMinute)
+    private func loadTimes() {
+        guard let slot else { return }
+        start = Self.date(from: slot.startMinute)
+        end = Self.date(from: slot.endMinute)
     }
 
     private static func date(from minutes: Int) -> Date {
-        Calendar.current.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: Date()) ?? Date()
+        // 24:00 is a real end of day here, but a clock field can only show 23:59.
+        let shown = min(minutes, DaySchedule.dayMinutes - 1)
+        return Calendar.current.date(bySettingHour: shown / 60, minute: shown % 60, second: 0, of: Date()) ?? Date()
     }
 
     private static func minutes(from date: Date) -> Int {

@@ -171,29 +171,6 @@ public extension TemporaryRequest {
     }
 }
 
-public extension RuleSet {
-    /// Gives each weekday exactly this window and counts as one rule change.
-    mutating func setWindow(
-        for category: ActivityCategory,
-        weekdays: [Int],
-        startMinute: Int,
-        endMinute: Int
-    ) {
-        guard let index = activityRules.firstIndex(where: { $0.category == category }) else { return }
-        activityRules[index].windows.removeAll { weekdays.contains($0.weekday) }
-        activityRules[index].windows += weekdays.map {
-            ScheduleWindow(weekday: $0, startMinute: startMinute, endMinute: endMinute)
-        }
-        revision += 1
-    }
-
-    mutating func clearWindows(for category: ActivityCategory, weekday: Int) {
-        guard let index = activityRules.firstIndex(where: { $0.category == category }) else { return }
-        activityRules[index].windows.removeAll { $0.weekday == weekday }
-        revision += 1
-    }
-}
-
 /// Reduces whatever a parent pastes to the host the classifier compares against.
 public func normalizedDomain(fromParentInput input: String) -> String? {
     let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

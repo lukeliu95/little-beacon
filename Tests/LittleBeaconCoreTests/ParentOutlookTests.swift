@@ -163,27 +163,6 @@ private func status(_ category: ActivityCategory, online: Bool = true) -> Device
     #expect(game.parentOutcome == "提醒 2 次，持续 1 分 15 秒")
 }
 
-@Test func applyingAWindowToWeekdaysIsOneRuleChangeAndKeepsTheWeekend() {
-    var set = RuleSet.starter
-    let revision = set.revision
-    set.setWindow(for: .game, weekdays: Array(2...6), startMinute: 19 * 60, endMinute: 20 * 60 + 30)
-
-    let windows = set.activityRules.first { $0.category == .game }!.windows
-    #expect(set.revision == revision + 1)
-    #expect(windows.filter { (2...6).contains($0.weekday) }.allSatisfy { $0.startMinute == 19 * 60 && $0.endMinute == 20 * 60 + 30 })
-    #expect(windows.filter { (2...6).contains($0.weekday) }.count == 5)
-    #expect(windows.filter { [1, 7].contains($0.weekday) }.count == 2)
-}
-
-@Test func clearingADayLeavesOtherCategoriesAlone() {
-    var set = RuleSet.starter
-    let videoBefore = set.activityRules.first { $0.category == .video }!.windows
-    set.clearWindows(for: .game, weekday: 2)
-
-    #expect(!set.activityRules.first { $0.category == .game }!.windows.contains { $0.weekday == 2 })
-    #expect(set.activityRules.first { $0.category == .video }!.windows == videoBefore)
-}
-
 @Test(arguments: [
     ("youtube.com", "youtube.com"),
     ("  WWW.YouTube.com ", "youtube.com"),

@@ -247,15 +247,15 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func setWindow(category: ActivityCategory, weekdays: [Int], startMinute: Int, endMinute: Int) {
-        snapshot.rules.setWindow(for: category, weekdays: weekdays, startMinute: startMinute, endMinute: endMinute)
+    func setSchedule(_ schedule: DaySchedule, category: ActivityCategory, weekday: Int) {
+        snapshot.rules.setSchedule(schedule, for: category, weekday: weekday)
         persist()
         let rulesToUpload = snapshot.rules
         Task { await uploadRulesIfPossible(rulesToUpload) }
     }
 
-    func clearWindows(category: ActivityCategory, weekday: Int) {
-        snapshot.rules.clearWindows(for: category, weekday: weekday)
+    func copySchedule(category: ActivityCategory, from weekday: Int, to weekdays: [Int]) {
+        snapshot.rules.copySchedule(for: category, from: weekday, to: weekdays)
         persist()
         let rulesToUpload = snapshot.rules
         Task { await uploadRulesIfPossible(rulesToUpload) }
