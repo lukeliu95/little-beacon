@@ -1,5 +1,5 @@
 import { database } from "../src/db.js";
-import { isRestrictedCategory } from "../src/domain.js";
+import { isAllowedWarningCount, isRestrictedCategory } from "../src/domain.js";
 import { authenticate, errorResponse, HttpError, json, nodeHandler, readJSON, requireMethod } from "../src/http.js";
 
 async function handler(request: Request): Promise<Response> {
@@ -11,7 +11,7 @@ async function handler(request: Request): Promise<Response> {
     if (typeof body.id !== "string" || !isRestrictedCategory(body.category)
       || typeof body.appName !== "string" || body.appName.length > 200
       || !Number.isInteger(body.durationSeconds) || Number(body.durationSeconds) < 0
-      || !Number.isInteger(body.warningCount) || Number(body.warningCount) < 1 || Number(body.warningCount) > 3
+      || !isAllowedWarningCount(body.warningCount)
       || typeof body.wasEnforced !== "boolean" || typeof body.startedAt !== "string") {
       throw new HttpError(400, "违规事件格式无效");
     }

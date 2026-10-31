@@ -1,4 +1,25 @@
+import { remoteCommandStatus } from "./domain.js";
 import { asISO } from "./http.js";
+
+export function mapCommand(row: Record<string, unknown>, now = new Date()) {
+  return {
+    id: row.id,
+    kind: row.kind,
+    target: row.target,
+    lock: row.lock_option,
+    status: remoteCommandStatus(String(row.status), new Date(String(row.expires_at)), now),
+    createdAt: asISO(row.created_at),
+    expiresAt: asISO(row.expires_at),
+    receivedAt: row.received_at ? asISO(row.received_at) : null,
+    finishedAt: row.finished_at ? asISO(row.finished_at) : null,
+    outcome: row.outcome ?? null,
+    closedApps: row.closed_apps ?? [],
+    failedApps: row.failed_apps ?? [],
+    frontAppName: row.front_app_name ?? null,
+    frontAppBundleID: row.front_app_bundle_id ?? null,
+    lockEndsAt: row.lock_ends_at ? asISO(row.lock_ends_at) : null,
+  };
+}
 
 export function mapStatus(row: Record<string, unknown> | undefined) {
   if (!row) return null;

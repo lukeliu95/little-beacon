@@ -89,9 +89,14 @@ final class AppModel: ObservableObject {
     private var nextViewingDistanceCheckAt = Date.distantPast
     private var viewingDistanceWarningStage = 0
     private var backgroundLaunchIsPending = true
+    private var remoteLockGuard = RemoteLockGuard()
+    /// Targets being closed right now, so a lock does not start over on an app already quitting.
+    private var remoteTargetsClosing: Set<RemoteTarget> = []
+    private var remoteCommandWatch: Task<Void, Never>?
 
     init() {
         snapshot = store.load()
+        snapshot.remoteControl.resumeAfterRestart()
         pomodoroModeAtLastTick = snapshot.rules.pomodoroMode
         applyPresence()
         configurePomodoroCoordinator()
@@ -141,6 +146,21 @@ final class AppModel: ObservableObject {
     }
     var hasRemoteConfiguration: Bool {
         !snapshot.apiBaseURL.isEmpty && KeychainStore.read(role: snapshot.role) != nil
+    }
+    var remoteCommands: [RemoteCommand] { snapshot.remoteCommands.sorted { $0.createdAt > $1.createdAt } }
+
+    /// Lines the child reads about closes on their way and locks in force.
+    var remoteNotices: [String] {
+        let now = Date()
+        let closing = snapshot.remoteControl.active
+            .filter(\.wasOpenWhenReceived)
+            .map { "家长要求关闭\($0.target.displayName)，记得存档" }
+        let locked = RemoteTarget.allCases.compactMap { target in
+            snapshot.remoteControl.lockEnd(for: target, at: now).map {
+                "\(target.displayName)已被家长锁定，\(remoteLockEndText($0, timeZoneIdentifier: snapshot.rules.timeZoneIdentifier))"
+            }
+        }
+        return closing + locked
     }
 
     func configure(role: DeviceRole) {
@@ -246,6 +266,8 @@ final class AppModel: ObservableObject {
                 snapshot.events = response.events
                 snapshot.requests = response.requests
                 if let status = response.status { snapshot.currentStatus = status }
+                announceEndedCommands(in: response.commands)
+                snapshot.remoteCommands = response.commands
                 for event in response.events where !oldEventIDs.contains(event.id) {
                     NotificationService.post(
                         title: event.isExtensionRecord ? "孩子加了一点时间" : "小灯塔发现违规活动",
@@ -270,8 +292,10 @@ final class AppModel: ObservableObject {
                 snapshot.lastRulesSyncAt = Date()
                 refreshViewingDistanceStatus()
                 snapshot.prune()
+                receiveRemoteCommands(response.commands)
                 persist()
                 try await client.updateStatus(snapshot.currentStatus)
+                try await flushRemoteReports(client: client)
                 try await flushPendingEvents(client: client)
             case .unconfigured:
                 break
@@ -283,6 +307,157 @@ final class AppModel: ObservableObject {
         } catch {
             connectionMessage = "离线，稍后重试"
             lastError = error.localizedDescription
+        }
+    }
+
+    // MARK: Remote close, parent side
+
+    func sendRemoteClose(_ target: RemoteTarget, lock: RemoteLockOption) async {
+        await sendRemoteCommand(kind: .close, target: target, lock: lock)
+    }
+
+    func sendRemoteUnlock(_ target: RemoteTarget) async {
+        await sendRemoteCommand(kind: .unlock, target: target, lock: .noLock)
+    }
+
+    /// The close found no game, but the parent knows better: remember the app, then close again.
+    func closeAsGame(_ app: RemoteFrontApp, lock: RemoteLockOption) async {
+        let normalized = app.bundleIdentifier.lowercased()
+        snapshot.rules.overrides.removeAll { $0.target == .bundleIdentifier && $0.value == normalized }
+        snapshot.rules.overrides.append(
+            ClassificationOverride(target: .bundleIdentifier, value: normalized, category: .game)
+        )
+        snapshot.rules.revision += 1
+        persist()
+        // The child reads the rule and the command from one sync, so the rule must land first.
+        await uploadRulesIfPossible(snapshot.rules)
+        await sendRemoteClose(.game, lock: lock)
+    }
+
+    private func sendRemoteCommand(kind: RemoteCommandKind, target: RemoteTarget, lock: RemoteLockOption) async {
+        await performRemoteAction {
+            let command = try await self.authenticatedClient().createRemoteCommand(kind: kind, target: target, lock: lock)
+            self.snapshot.remoteCommands.removeAll { $0.id == command.id }
+            self.snapshot.remoteCommands.append(command)
+            self.persist()
+            self.watchRemoteCommands()
+        }
+    }
+
+    /// Checks every five seconds until the child has answered. The ordinary 30-second sync would
+    /// leave the parent looking at "已发出" long after the game has gone.
+    private func watchRemoteCommands() {
+        remoteCommandWatch?.cancel()
+        remoteCommandWatch = Task { [weak self] in
+            for _ in 0..<36 {
+                try? await Task.sleep(for: .seconds(5))
+                guard let self, !Task.isCancelled else { return }
+                await self.syncNow()
+                let now = Date()
+                guard self.snapshot.remoteCommands.contains(where: { $0.isInFlight(at: now) }) else { return }
+            }
+        }
+    }
+
+    private func announceEndedCommands(in commands: [RemoteCommand]) {
+        let now = Date()
+        for old in snapshot.remoteCommands where old.isInFlight(at: now) {
+            guard let new = commands.first(where: { $0.id == old.id }), new.hasEnded(at: now) else { continue }
+            NotificationService.post(title: new.parentTitle, body: new.parentOutcome(at: now))
+        }
+    }
+
+    // MARK: Remote close, child side
+
+    private var familyCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: snapshot.rules.timeZoneIdentifier) ?? .current
+        return calendar
+    }
+
+    private var isBreakActive: Bool { pomodoroBreakCoordinator?.isActiveBreak == true }
+
+    private func lockEndText(_ endsAt: Date) -> String {
+        remoteLockEndText(endsAt, timeZoneIdentifier: snapshot.rules.timeZoneIdentifier)
+    }
+
+    private func receiveRemoteCommands(_ commands: [RemoteCommand], now: Date = Date()) {
+        guard !commands.isEmpty else { return }
+        let overrides = snapshot.rules.overrides
+        let events = snapshot.remoteControl.receive(
+            commands,
+            openState: { activityMonitor.openState(of: $0, classifier: classifier, overrides: overrides) },
+            at: now
+        )
+        for event in events where !isBreakActive {
+            switch event {
+            case let .closing(target, lock):
+                let message = ReminderMessage.remoteClosing(target, lock: lock)
+                presentAlert(title: message.title, message: message.body, tone: .warning)
+            case let .unlocked(target):
+                toast.show(.remoteUnlocked(target))
+            }
+        }
+        startDueRemoteCloses(at: now)
+    }
+
+    private func startDueRemoteCloses(at now: Date) {
+        for close in snapshot.remoteControl.startDueCloses(at: now) {
+            Task { await runRemoteClose(close) }
+        }
+    }
+
+    private func runRemoteClose(_ close: ActiveRemoteClose) async {
+        remoteTargetsClosing.insert(close.target)
+        let result = await activityMonitor.close(close.target, classifier: classifier, overrides: snapshot.rules.overrides)
+        remoteTargetsClosing.remove(close.target)
+        let foundNothing = result.closed.isEmpty && result.failed.isEmpty
+        let frontApp = close.target == .game && foundNothing && !close.wasOpenWhenReceived
+            ? activityMonitor.frontmostApp(classifier: classifier) : nil
+        let report = snapshot.remoteControl.finish(
+            close.id,
+            closed: result.closed,
+            failed: result.failed,
+            frontApp: frontApp,
+            at: Date(),
+            calendar: familyCalendar
+        )
+        persist()
+        if !isBreakActive, report?.outcome == .closed || report?.outcome == .closedByChild {
+            let message = ReminderMessage.remoteClosed(close.target, lockEnd: report?.lockEndsAt.map(lockEndText))
+            presentAlert(title: message.title, message: message.body, tone: .gentle)
+        }
+        if let client = try? authenticatedClient() {
+            try? await flushRemoteReports(client: client)
+        }
+    }
+
+    private func applyRemoteLock(_ action: RemoteLockAction, now: Date) {
+        switch action {
+        case let .warn(target):
+            guard let endsAt = snapshot.remoteControl.lockEnd(for: target, at: now) else { return }
+            let message = ReminderMessage.remoteLocked(target, lockEnd: lockEndText(endsAt))
+            presentAlert(title: message.title, message: message.body, tone: .warning)
+        case let .close(target):
+            // The lock may have been lifted during the few seconds of warning.
+            guard snapshot.remoteControl.lockEnd(for: target, at: now) != nil else { return }
+            remoteTargetsClosing.insert(target)
+            Task {
+                _ = await activityMonitor.close(target, classifier: classifier, overrides: snapshot.rules.overrides)
+                remoteTargetsClosing.remove(target)
+            }
+        }
+    }
+
+    private func flushRemoteReports(client: APIClient) async throws {
+        for report in snapshot.remoteControl.reports {
+            do {
+                try await client.reportRemoteCommand(report)
+            } catch APIError.server(status: 400, message: _) {
+                // The server will never take this one; retrying would hold back every report after it.
+            }
+            snapshot.remoteControl.clearReport(report)
+            persist()
         }
     }
 
@@ -532,7 +707,18 @@ final class AppModel: ObservableObject {
             activeAlert = nil
         }
         let isEffectivelyIdle = isIdle || breakIsActive
-        let followedCategory = breakIsActive ? ActivityCategory.idle : activity.category
+        startDueRemoteCloses(at: now)
+        // A locked app is on its way out, so the schedule's reminders have nothing to add.
+        let blockedByLock = breakIsActive ? nil : snapshot.remoteControl.blockedTarget(
+            for: activity,
+            isBrowser: classifier.isBrowser(bundleIdentifier: observation.bundleIdentifier),
+            at: now
+        ).flatMap { remoteTargetsClosing.contains($0) ? nil : $0 }
+        if let action = remoteLockGuard.advance(blocked: blockedByLock, at: now) {
+            applyRemoteLock(action, now: now)
+        }
+        let rulesStandAside = breakIsActive || blockedByLock != nil
+        let followedCategory = rulesStandAside ? ActivityCategory.idle : activity.category
         let endingStep = snapshot.endingMachine.advance(
             category: followedCategory,
             stretch: snapshot.rules.openStretch(for: followedCategory, at: now, grants: activeGrants),
@@ -553,7 +739,7 @@ final class AppModel: ObservableObject {
             dailyUsageSeconds: snapshot.dailyUsage.activeSeconds
         )
 
-        if breakIsActive {
+        if rulesStandAside {
             let actions = violationMachine.advance(
                 activity: ClassifiedActivity(observation: .idle, category: .idle),
                 isAllowed: true,
@@ -711,15 +897,26 @@ final class AppModel: ObservableObject {
                 warningMessage = nil
             case let .endActivity(category, strategy):
                 dimmer.hide()
-                let succeeded = activityMonitor.enforce(activity)
-                recordEnding(activity: activity, strategy: strategy, now: now, wasEnforced: succeeded)
-                let message = ReminderMessage.activityEnded(category: category)
-                if strategy == .strict {
-                    reminderShield.show(message)
-                } else {
-                    presentAlert(title: message.title, message: message.body, tone: .warning)
-                }
+                Task { await endActivity(activity, category: category, strategy: strategy, now: now) }
             }
+        }
+    }
+
+    private func endActivity(
+        _ activity: ClassifiedActivity,
+        category: ActivityCategory,
+        strategy: ReminderStrategy,
+        now: Date
+    ) async {
+        let succeeded = await activityMonitor.enforce(activity)
+        recordEnding(activity: activity, strategy: strategy, now: now, wasEnforced: succeeded)
+        // Closing can take seconds, and a break may have started meanwhile.
+        guard !isBreakActive else { return }
+        let message = ReminderMessage.activityEnded(category: category)
+        if strategy == .strict {
+            reminderShield.show(message)
+        } else {
+            presentAlert(title: message.title, message: message.body, tone: .warning)
         }
     }
 
@@ -941,20 +1138,27 @@ final class AppModel: ObservableObject {
                 snapshot.events.append(event)
                 snapshot.pendingEventIDs.insert(event.id)
             case let .enforce(activity):
-                let succeeded = activityMonitor.enforce(activity)
-                let message = succeeded ? "已结束当前违规活动。" : "无法自动结束活动，请联系家长检查权限。"
-                warningMessage = message
-                presentAlert(title: succeeded ? "已结束当前活动" : "需要家长帮助", message: message, tone: .warning)
-                if let id = activeEventID,
-                   let index = snapshot.events.firstIndex(where: { $0.id == id }) {
-                    snapshot.events[index].wasEnforced = succeeded
-                    snapshot.events[index].warningCount = violationMachine.state?.warningCount ?? 3
-                    snapshot.pendingEventIDs.insert(id)
-                }
+                let eventID = activeEventID
+                let warningCount = violationMachine.state?.warningCount ?? 3
+                Task { await enforceViolation(activity, eventID: eventID, warningCount: warningCount) }
             case .reset:
                 warningMessage = nil
                 activeEventID = nil
             }
+        }
+    }
+
+    private func enforceViolation(_ activity: ClassifiedActivity, eventID: UUID?, warningCount: Int) async {
+        let succeeded = await activityMonitor.enforce(activity)
+        let message = succeeded ? "已结束当前违规活动。" : "无法自动结束活动，请联系家长检查权限。"
+        warningMessage = message
+        if !isBreakActive {
+            presentAlert(title: succeeded ? "已结束当前活动" : "需要家长帮助", message: message, tone: .warning)
+        }
+        if let eventID, let index = snapshot.events.firstIndex(where: { $0.id == eventID }) {
+            snapshot.events[index].wasEnforced = succeeded
+            snapshot.events[index].warningCount = warningCount
+            snapshot.pendingEventIDs.insert(eventID)
         }
     }
 
@@ -985,8 +1189,13 @@ final class AppModel: ObservableObject {
     private func flushPendingEvents(client: APIClient) async throws {
         for id in Array(snapshot.pendingEventIDs) {
             guard let event = snapshot.events.first(where: { $0.id == id }) else { continue }
-            try await client.uploadEvent(event)
-            snapshot.pendingEventIDs.remove(id)
+            do {
+                try await client.uploadEvent(event)
+                snapshot.pendingEventIDs.remove(id)
+            } catch APIError.server(status: 400, message: _) {
+                // Refused by this server. It stays queued for a newer one, but must not hold back
+                // the events after it or make a working connection look offline.
+            }
         }
     }
 

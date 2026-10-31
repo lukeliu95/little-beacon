@@ -25,6 +25,10 @@ struct LocalSnapshot: Codable {
     /// "再玩 5 分钟" grants live apart from `temporaryGrants`, which every sync replaces.
     var extensionGrants: [TemporaryGrant] = []
     var extensionLedger = ExtensionLedger()
+    /// On the child: closes on their way, locks, and reports still to upload.
+    var remoteControl = RemoteControlState()
+    /// On the parent: what was asked of the child Mac and how it went.
+    var remoteCommands: [RemoteCommand] = []
 
     init() {}
 
@@ -33,6 +37,7 @@ struct LocalSnapshot: Codable {
         case requests, events, pendingEventIDs, currentStatus, monitoringEnabled, lastRulesSyncAt
         case dailyUsage, dailyUsageNudgeShown, viewingDistanceCalibration
         case endingMachine, extensionGrants, extensionLedger
+        case remoteControl, remoteCommands
     }
 
     // Custom decoding: a real family's existing state.json predates dailyUsage/dailyUsageNudgeShown.
@@ -62,6 +67,8 @@ struct LocalSnapshot: Codable {
         endingMachine = try container.decodeIfPresent(EndingMachine.self, forKey: .endingMachine) ?? EndingMachine()
         extensionGrants = try container.decodeIfPresent([TemporaryGrant].self, forKey: .extensionGrants) ?? []
         extensionLedger = try container.decodeIfPresent(ExtensionLedger.self, forKey: .extensionLedger) ?? ExtensionLedger()
+        remoteControl = try container.decodeIfPresent(RemoteControlState.self, forKey: .remoteControl) ?? RemoteControlState()
+        remoteCommands = try container.decodeIfPresent([RemoteCommand].self, forKey: .remoteCommands) ?? []
     }
 
     mutating func prune(now: Date = Date()) {
@@ -69,6 +76,7 @@ struct LocalSnapshot: Codable {
         pendingEventIDs.formIntersection(events.map(\.id))
         temporaryGrants.removeAll { $0.endsAt <= now }
         extensionGrants.removeAll { $0.endsAt <= now }
+        remoteControl.prune(now: now)
     }
 }
 
