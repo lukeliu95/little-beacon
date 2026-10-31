@@ -9,15 +9,20 @@ BUILD_NUMBER="${LITTLE_BEACON_BUILD:-$(plutil -extract CFBundleVersion raw "$ROO
 
 mkdir -p "$CACHE/swift-home" "$CACHE/clang-cache" "$CACHE/swiftpm-cache"
 
-env \
-  HOME="$CACHE/swift-home" \
-  CLANG_MODULE_CACHE_PATH="$CACHE/clang-cache" \
-  SWIFTPM_MODULECACHE_OVERRIDE="$CACHE/swiftpm-cache" \
-  swift build --configuration release --disable-sandbox \
-    --arch arm64 --arch x86_64 \
-    --package-path "$ROOT"
+release_build() {
+  env \
+    HOME="$CACHE/swift-home" \
+    CLANG_MODULE_CACHE_PATH="$CACHE/clang-cache" \
+    SWIFTPM_MODULECACHE_OVERRIDE="$CACHE/swiftpm-cache" \
+    swift build --configuration release --disable-sandbox \
+      --arch arm64 --arch x86_64 \
+      --package-path "$ROOT" "$@"
+}
 
-BUILD_PRODUCTS="$ROOT/.build/apple/Products/Release"
+release_build
+
+# Xcode 27 moved universal products out of .build/apple, so ask SwiftPM instead of guessing.
+BUILD_PRODUCTS="$(release_build --show-bin-path)"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
