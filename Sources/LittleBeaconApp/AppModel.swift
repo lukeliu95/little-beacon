@@ -96,6 +96,7 @@ final class AppModel: ObservableObject {
     var hasViewingDistanceCalibration: Bool { snapshot.viewingDistanceCalibration != nil }
     var events: [ViolationEvent] { snapshot.events.sorted { $0.startedAt > $1.startedAt } }
     var requests: [TemporaryRequest] { snapshot.requests.sorted { $0.createdAt > $1.createdAt } }
+    var pendingRequests: [TemporaryRequest] { requests.filter { $0.status == .pending } }
     var currentStatus: DeviceStatus {
         var status = snapshot.currentStatus
         if Date().timeIntervalSince(status.lastSeenAt) > 90 { status.isOnline = false }
@@ -246,23 +247,15 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func addOrUpdateWindow(
-        category: ActivityCategory,
-        weekday: Int,
-        enabled: Bool,
-        startMinute: Int,
-        endMinute: Int
-    ) {
-        guard let index = snapshot.rules.activityRules.firstIndex(where: { $0.category == category }) else {
-            return
-        }
-        snapshot.rules.activityRules[index].windows.removeAll { $0.weekday == weekday }
-        if enabled {
-            snapshot.rules.activityRules[index].windows.append(
-                ScheduleWindow(weekday: weekday, startMinute: startMinute, endMinute: endMinute)
-            )
-        }
-        snapshot.rules.revision += 1
+    func setSchedule(_ schedule: DaySchedule, category: ActivityCategory, weekday: Int) {
+        snapshot.rules.setSchedule(schedule, for: category, weekday: weekday)
+        persist()
+        let rulesToUpload = snapshot.rules
+        Task { await uploadRulesIfPossible(rulesToUpload) }
+    }
+
+    func copySchedule(category: ActivityCategory, from weekday: Int, to weekdays: [Int]) {
+        snapshot.rules.copySchedule(for: category, from: weekday, to: weekdays)
         persist()
         let rulesToUpload = snapshot.rules
         Task { await uploadRulesIfPossible(rulesToUpload) }
@@ -411,22 +404,6 @@ final class AppModel: ObservableObject {
                 lastError = error.localizedDescription
             }
         }
-    }
-
-    func addDemoEvent() {
-        let now = Date()
-        snapshot.events.append(
-            ViolationEvent(
-                category: .video,
-                appName: "Safari",
-                normalizedDomain: "youtube.com",
-                startedAt: now.addingTimeInterval(-180),
-                durationSeconds: 180,
-                warningCount: 3,
-                wasEnforced: true
-            )
-        )
-        persist()
     }
 
     private func startServices() {

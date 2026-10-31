@@ -4,6 +4,22 @@ import LittleBeaconCore
 
 private let mainWindowID = "main"
 
+private var visibleMainWindow: NSWindow? {
+    NSApp.windows.first { $0.canBecomeMain && $0.isVisible }
+}
+
+@MainActor
+func showMainWindow(_ openWindow: OpenWindowAction) {
+    if visibleMainWindow == nil {
+        openWindow(id: mainWindowID)
+    }
+    NSApp.activate(ignoringOtherApps: true)
+    // A background app is not raised on its own, and a new window arrives on the next run-loop turn.
+    DispatchQueue.main.async {
+        visibleMainWindow?.makeKeyAndOrderFront(nil)
+    }
+}
+
 @main
 struct LittleBeaconApp: App {
     @NSApplicationDelegateAdaptor(ApplicationLifecycleController.self) private var appDelegate
@@ -35,9 +51,14 @@ struct LittleBeaconApp: App {
             }
         }
 
-        MenuBarExtra("小灯塔", systemImage: "light.beacon.max.fill") {
+        MenuBarExtra("小灯塔", systemImage: "light.beacon.max.fill", isInserted: .constant(model.role != .parent)) {
             MenuBarContent(model: model, updates: updates)
         }
+
+        MenuBarExtra("小灯塔", systemImage: "light.beacon.max.fill", isInserted: .constant(model.role == .parent)) {
+            ParentMenuPanel(model: model)
+        }
+        .menuBarExtraStyle(.window)
     }
 }
 
@@ -55,7 +76,7 @@ private struct MenuBarContent: View {
                 if let warning = model.warningMessage {
                     Text(warning).foregroundStyle(.orange)
                 }
-                Button("打开小灯塔") { showMainWindow() }
+                Button("打开小灯塔") { showMainWindow(openWindow) }
             } else if model.role == .parent {
                 Text(model.connectionMessage)
             } else {
@@ -72,20 +93,5 @@ private struct MenuBarContent: View {
         }
         .padding(10)
         .frame(width: 280)
-    }
-
-    private func showMainWindow() {
-        if visibleMainWindow == nil {
-            openWindow(id: mainWindowID)
-        }
-        NSApp.activate(ignoringOtherApps: true)
-        // A background app is not raised on its own, and a new window arrives on the next run-loop turn.
-        DispatchQueue.main.async {
-            visibleMainWindow?.makeKeyAndOrderFront(nil)
-        }
-    }
-
-    private var visibleMainWindow: NSWindow? {
-        NSApp.windows.first { $0.canBecomeMain && $0.isVisible }
     }
 }
