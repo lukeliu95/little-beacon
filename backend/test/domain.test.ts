@@ -7,13 +7,118 @@ import {
   hashPairingCode,
   hashToken,
   isAllowedDuration,
+  isAllowedWarningCount,
   mergeMissingRuleSettings,
+  parseRemoteCommand,
+  parseRemoteReport,
   parseRequestStartsAt,
+  remoteCommandStatus,
+  remoteDeliveryDeadline,
   secureStringEqual,
   shouldAcceptRuleRevision,
   validateRuleSet,
 } from "../src/domain.js";
 import { asISO } from "../src/http.js";
+import { mapCommand } from "../src/mappers.js";
+
+const commandID = "6f9619ff-8b86-4d11-b42d-00c04fc964ff";
+
+test("a record of the child's own extra time has no warnings and must be accepted", () => {
+  assert.equal(isAllowedWarningCount(0), true);
+  assert.equal(isAllowedWarningCount(3), true);
+  assert.equal(isAllowedWarningCount(4), false);
+  assert.equal(isAllowedWarningCount(-1), false);
+  assert.equal(isAllowedWarningCount("0"), false);
+});
+
+test("a close must name its target and lock, an unlock never carries one", () => {
+  assert.deepEqual(
+    parseRemoteCommand({ kind: "close", target: "game", lock: "30m" }),
+    { kind: "close", target: "game", lock: "30m" },
+  );
+  assert.deepEqual(
+    parseRemoteCommand({ kind: "unlock", target: "browser", lock: "today" }),
+    { kind: "unlock", target: "browser", lock: "none" },
+  );
+  assert.equal(parseRemoteCommand({ kind: "close", target: "game" }), null);
+  assert.equal(parseRemoteCommand({ kind: "close", target: "video", lock: "none" }), null);
+  assert.equal(parseRemoteCommand({ kind: "shutdown", target: "game", lock: "none" }), null);
+});
+
+test("a close stops being deliverable after five minutes, an unlock after a day", () => {
+  const now = new Date("2026-10-31T12:00:00Z");
+  assert.equal(remoteDeliveryDeadline("close", now).toISOString(), "2026-10-31T12:05:00.000Z");
+  assert.equal(remoteDeliveryDeadline("unlock", now).toISOString(), "2026-11-01T12:00:00.000Z");
+});
+
+test("only an undelivered command expires", () => {
+  const deadline = new Date("2026-10-31T12:05:00Z");
+  const after = new Date("2026-10-31T12:05:00Z");
+  const before = new Date("2026-10-31T12:04:59Z");
+  assert.equal(remoteCommandStatus("pending", deadline, before), "pending");
+  assert.equal(remoteCommandStatus("pending", deadline, after), "expired");
+  assert.equal(remoteCommandStatus("received", deadline, after), "received");
+  assert.equal(remoteCommandStatus("finished", deadline, after), "finished");
+});
+
+test("a report needs a real command id and a known outcome", () => {
+  const at = "2026-10-31T12:00:00Z";
+  assert.equal(parseRemoteReport({ id: "1; DROP TABLE", status: "received", at }), null);
+  assert.equal(parseRemoteReport({ id: commandID, status: "done", at }), null);
+  assert.equal(parseRemoteReport({ id: commandID, status: "finished", outcome: "exploded", at }), null);
+  assert.equal(
+    parseRemoteReport({ id: commandID, status: "finished", outcome: "closed", closedApps: "Roblox", at }),
+    null,
+  );
+  assert.equal(
+    parseRemoteReport({ id: commandID, status: "finished", outcome: "closed", lockEndsAt: "soon", at }),
+    null,
+  );
+});
+
+test("a report keeps what happened, bounded in size, and when it happened", () => {
+  const now = new Date("2026-10-31T12:30:00Z");
+  const report = parseRemoteReport({
+    id: commandID,
+    status: "finished",
+    at: "2026-10-31T12:00:00Z",
+    outcome: "partial",
+    closedApps: Array.from({ length: 30 }, (_, index) => `Game ${index}`),
+    failedApps: ["  Steam  ", "", 7],
+    frontAppName: "x".repeat(500),
+    frontAppBundleID: "com.example.game",
+    lockEndsAt: "2026-10-31T12:30:00Z",
+  }, now);
+  assert.ok(report && report.status === "finished");
+  assert.equal(report.at.toISOString(), "2026-10-31T12:00:00.000Z");
+  assert.equal(report.closedApps.length, 20);
+  assert.deepEqual(report.failedApps, ["Steam"]);
+  assert.equal(report.frontAppName?.length, 200);
+  assert.equal(report.lockEndsAt?.toISOString(), "2026-10-31T12:30:00.000Z");
+});
+
+test("a report dated in the future is not believed", () => {
+  const now = new Date("2026-10-31T12:00:00Z");
+  const report = parseRemoteReport({ id: commandID, status: "received", at: "2027-01-01T00:00:00Z" }, now);
+  assert.equal(report?.at.getTime(), now.getTime());
+});
+
+test("the parent sees a pending command past its deadline as expired", () => {
+  const row = {
+    id: commandID,
+    kind: "close",
+    target: "browser",
+    lock_option: "60m",
+    status: "pending",
+    created_at: "2026-10-31T12:00:00Z",
+    expires_at: "2026-10-31T12:05:00Z",
+  };
+  const mapped = mapCommand(row, new Date("2026-10-31T12:06:00Z"));
+  assert.equal(mapped.status, "expired");
+  assert.equal(mapped.lock, "60m");
+  assert.deepEqual(mapped.closedApps, []);
+  assert.equal(mapped.lockEndsAt, null);
+});
 
 test("tokens are random, URL-safe, and only hashes are stable", () => {
   const first = generateToken();

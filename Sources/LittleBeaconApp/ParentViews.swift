@@ -235,6 +235,7 @@ private struct TodayView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(BeaconStyle.groupFill, in: RoundedRectangle(cornerRadius: 12))
                 }
+                RemoteControlBand(model: model)
                 VStack(alignment: .leading, spacing: 14) {
                     SectionTitle(text: "今天的时段")
                     DayRail(outlook: outlook)
@@ -506,7 +507,7 @@ private struct RecordsView: View {
         ParentPage {
             VStack(alignment: .leading, spacing: 4) {
                 PageTitle(text: "记录")
-                Text("只记录超出时段的活动，保留 30 天后自动删除。")
+                Text("只记录超出时段的活动和家长的远程关闭，保留 30 天后自动删除。")
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
             }
@@ -516,6 +517,13 @@ private struct RecordsView: View {
                     .foregroundStyle(.secondary)
             } else {
                 EventList(events: model.events)
+            }
+            let closes = model.remoteCommands.filter { $0.kind == .close }
+            if !closes.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    SectionTitle(text: "远程关闭")
+                    RemoteRecordList(commands: closes)
+                }
             }
         }
     }
@@ -1470,6 +1478,7 @@ struct ParentMenuPanel: View {
             Text(outlook.summary)
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
+            RemoteControlBand(model: model)
             Rectangle().fill(BeaconStyle.hairline).frame(height: 1)
             VStack(alignment: .leading, spacing: 2) {
                 MenuPanelRow(title: "打开小灯塔") {

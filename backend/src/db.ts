@@ -92,10 +92,31 @@ export async function ensureSchema(sql: SQL): Promise<void> {
     starts_at timestamptz NOT NULL,
     ends_at timestamptz NOT NULL
   )`;
+  await sql`CREATE TABLE IF NOT EXISTS remote_commands (
+    id uuid PRIMARY KEY,
+    household_id uuid NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+    device_id uuid NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    kind text NOT NULL CHECK (kind IN ('close', 'unlock')),
+    target text NOT NULL CHECK (target IN ('game', 'browser')),
+    lock_option text NOT NULL CHECK (lock_option IN ('none', '30m', '60m', 'today')),
+    status text NOT NULL CHECK (status IN ('pending', 'received', 'finished')),
+    created_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    received_at timestamptz,
+    finished_at timestamptz,
+    outcome text CHECK (outcome IN ('closed', 'partial', 'nothingOpen', 'closedByChild', 'notConfirmed', 'stale', 'unlocked')),
+    closed_apps jsonb NOT NULL DEFAULT '[]',
+    failed_apps jsonb NOT NULL DEFAULT '[]',
+    front_app_name text,
+    front_app_bundle_id text,
+    lock_ends_at timestamptz
+  )`;
+  await sql`CREATE INDEX IF NOT EXISTS remote_commands_device_idx ON remote_commands(device_id, status, created_at)`;
 }
 
 export async function cleanupExpired(sql: SQL): Promise<void> {
   await sql`DELETE FROM violation_events WHERE expires_at <= now()`;
   await sql`DELETE FROM pairing_codes WHERE expires_at <= now() OR used_at IS NOT NULL`;
   await sql`DELETE FROM temporary_grants WHERE ends_at <= now()`;
+  await sql`DELETE FROM remote_commands WHERE created_at <= now() - interval '30 days'`;
 }

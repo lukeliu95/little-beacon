@@ -92,3 +92,29 @@ CREATE TABLE IF NOT EXISTS temporary_grants (
   starts_at timestamptz NOT NULL,
   ends_at timestamptz NOT NULL
 );
+
+-- Added for parents closing games and browsers remotely. Must be applied manually against the
+-- production Neon database BEFORE the backend that reads it is deployed: both sync routes query
+-- this table, so deploying first stops every client's sync.
+CREATE TABLE IF NOT EXISTS remote_commands (
+  id uuid PRIMARY KEY,
+  household_id uuid NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  device_id uuid NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  kind text NOT NULL CHECK (kind IN ('close', 'unlock')),
+  target text NOT NULL CHECK (target IN ('game', 'browser')),
+  lock_option text NOT NULL CHECK (lock_option IN ('none', '30m', '60m', 'today')),
+  status text NOT NULL CHECK (status IN ('pending', 'received', 'finished')),
+  created_at timestamptz NOT NULL,
+  expires_at timestamptz NOT NULL,
+  received_at timestamptz,
+  finished_at timestamptz,
+  outcome text CHECK (outcome IN ('closed', 'partial', 'nothingOpen', 'closedByChild', 'notConfirmed', 'stale', 'unlocked')),
+  closed_apps jsonb NOT NULL DEFAULT '[]',
+  failed_apps jsonb NOT NULL DEFAULT '[]',
+  front_app_name text,
+  front_app_bundle_id text,
+  lock_ends_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS remote_commands_device_idx
+  ON remote_commands(device_id, status, created_at);

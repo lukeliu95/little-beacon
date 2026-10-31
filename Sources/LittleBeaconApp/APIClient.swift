@@ -17,17 +17,61 @@ struct PairResponse: Codable {
     let token: String
 }
 
-struct ParentSyncResponse: Codable {
+/// Commands decode one by one: a server that predates them, or a command kind this version does
+/// not know yet, must never take the rest of the sync, or the commands beside it, down too.
+private struct DecodedCommand: Decodable {
+    let command: RemoteCommand?
+
+    init(from decoder: Decoder) {
+        command = try? RemoteCommand(from: decoder)
+    }
+}
+
+private func decodedCommands<Key: CodingKey>(
+    from container: KeyedDecodingContainer<Key>,
+    forKey key: Key
+) -> [RemoteCommand] {
+    ((try? container.decodeIfPresent([DecodedCommand].self, forKey: key)) ?? []).compactMap(\.command)
+}
+
+struct ParentSyncResponse: Decodable {
     let status: DeviceStatus?
     let events: [ViolationEvent]
     let requests: [TemporaryRequest]
     let rules: RuleSet
+    let commands: [RemoteCommand]
+
+    private enum CodingKeys: String, CodingKey {
+        case status, events, requests, rules, commands
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        status = try container.decodeIfPresent(DeviceStatus.self, forKey: .status)
+        events = try container.decode([ViolationEvent].self, forKey: .events)
+        requests = try container.decode([TemporaryRequest].self, forKey: .requests)
+        rules = try container.decode(RuleSet.self, forKey: .rules)
+        commands = decodedCommands(from: container, forKey: .commands)
+    }
 }
 
-struct ChildSyncResponse: Codable {
+struct ChildSyncResponse: Decodable {
     let rules: RuleSet
     let grants: [TemporaryGrant]
     let requests: [TemporaryRequest]
+    let commands: [RemoteCommand]
+
+    private enum CodingKeys: String, CodingKey {
+        case rules, grants, requests, commands
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        rules = try container.decode(RuleSet.self, forKey: .rules)
+        grants = try container.decode([TemporaryGrant].self, forKey: .grants)
+        requests = try container.decode([TemporaryRequest].self, forKey: .requests)
+        commands = decodedCommands(from: container, forKey: .commands)
+    }
 }
 
 enum APIError: LocalizedError {
@@ -116,6 +160,29 @@ struct APIClient {
             body: ResolveBody(approved: approved)
         )
         return response.grant
+    }
+
+    func createRemoteCommand(
+        kind: RemoteCommandKind,
+        target: RemoteTarget,
+        lock: RemoteLockOption
+    ) async throws -> RemoteCommand {
+        struct CommandBody: Encodable {
+            let kind: RemoteCommandKind
+            let target: RemoteTarget
+            let lock: RemoteLockOption
+        }
+        struct CommandResponse: Decodable { let command: RemoteCommand }
+        let response: CommandResponse = try await send(
+            path: "api/commands",
+            method: "POST",
+            body: CommandBody(kind: kind, target: target, lock: lock)
+        )
+        return response.command
+    }
+
+    func reportRemoteCommand(_ report: RemoteCommandReport) async throws {
+        let _: AckResponse = try await send(path: "api/commands", method: "PATCH", body: report)
     }
 
     private func send<Response: Decodable, Body: Encodable>(

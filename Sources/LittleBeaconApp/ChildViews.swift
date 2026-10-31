@@ -35,6 +35,13 @@ struct ChildDashboardView: View {
                             .background(BeaconStyle.groupFill, in: RoundedRectangle(cornerRadius: 12))
                     }
                     finishingBanner
+                    ForEach(model.remoteNotices, id: \.self) { notice in
+                        Text(notice)
+                            .font(.system(size: 14, weight: .semibold))
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(BeaconStyle.groupFill, in: RoundedRectangle(cornerRadius: 12))
+                    }
                     VStack(alignment: .leading, spacing: 14) {
                         Text("今天什么时候可以玩").font(.system(size: 15, weight: .semibold))
                         DayRail(outlook: outlook)
@@ -327,6 +334,11 @@ struct ChildMenuPanel: View {
             }
             if let warning = model.warningMessage {
                 Text(warning)
+                    .font(.system(size: 13, weight: .semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(model.remoteNotices, id: \.self) { notice in
+                Text(notice)
                     .font(.system(size: 13, weight: .semibold))
                     .fixedSize(horizontal: false, vertical: true)
             }
