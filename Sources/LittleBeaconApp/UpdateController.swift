@@ -11,6 +11,10 @@ private final class UpdateLifecycleBridge: NSObject, SPUUpdaterDelegate {
     ) -> Bool {
         ApplicationTerminationGate.shared.postponeUpdateUntilBreakCompletes(installHandler)
     }
+
+    func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
+        ApplicationTerminationGate.shared.allowUpdateRelaunch()
+    }
 }
 
 @MainActor

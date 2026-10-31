@@ -40,6 +40,41 @@ struct RootView: View {
                     .padding(20)
             }
         }
+        .background(BackgroundLaunchWindowCloser(shouldClose: model.consumeBackgroundLaunch))
+    }
+}
+
+/// macOS 14 has no scene option to skip the launch window, so a paired child Mac closes it
+/// before it is ever seen.
+private struct BackgroundLaunchWindowCloser: NSViewRepresentable {
+    let shouldClose: () -> Bool
+
+    func makeNSView(context: Context) -> NSView {
+        CloserView(shouldClose: shouldClose)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class CloserView: NSView {
+        private let shouldClose: () -> Bool
+
+        init(shouldClose: @escaping () -> Bool) {
+            self.shouldClose = shouldClose
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("not used from a nib") }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window, shouldClose() else { return }
+            window.alphaValue = 0
+            DispatchQueue.main.async {
+                window.close()
+                window.alphaValue = 1
+            }
+        }
     }
 }
 
@@ -79,7 +114,7 @@ private struct RoleSelectionView: View {
                     ) { model.configure(role: .child) }
                 }
                 .frame(maxWidth: 700)
-                Text("孩子端始终可见；小灯塔不记录屏幕、按键或聊天内容。")
+                Text("孩子端始终显示在菜单栏；小灯塔不记录屏幕、按键或聊天内容。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -220,143 +255,137 @@ private struct ChildDashboardView: View {
     }
 
     var body: some View {
-        ZStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("小灯塔正在工作")
-                                .font(.system(size: 30, weight: .bold, design: .rounded))
-                            Text("看得见，也说得清。")
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        ConnectionBadge(text: model.connectionMessage)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("小灯塔正在工作")
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                        Text("看得见，也说得清。")
+                            .foregroundStyle(.secondary)
                     }
+                    Spacer()
+                    ConnectionBadge(text: model.connectionMessage)
+                }
 
-                    if let warning = model.warningMessage {
-                        Label(warning, systemImage: "exclamationmark.triangle.fill")
-                            .font(.headline)
-                            .foregroundStyle(.orange)
-                            .padding(18)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
-                    }
+                if let warning = model.warningMessage {
+                    Label(warning, systemImage: "exclamationmark.triangle.fill")
+                        .font(.headline)
+                        .foregroundStyle(.orange)
+                        .padding(18)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
+                }
 
-                    HStack(spacing: 16) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("当前前台活动")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            HStack(spacing: 12) {
-                                CategoryIcon(category: model.currentActivity.category)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(model.currentActivity.category.displayName)
-                                        .font(.title2.bold())
-                                    Text(model.currentActivity.observation.appName.isEmpty
-                                         ? "没有检测到前台应用"
-                                         : model.currentActivity.observation.appName)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            Text("今日已用 \(formatUsageDuration(model.currentStatus.dailyUsageSeconds))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .cardStyle()
-
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("隐私边界")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            Label("不截屏、不记按键", systemImage: "eye.slash")
-                            Label("只在违规时生成事件", systemImage: "list.bullet.rectangle")
-                            Label("事件 30 天后删除", systemImage: "calendar.badge.minus")
-                        }
-                        .cardStyle()
-                    }
-
-                    if model.rules.viewingDistancePolicy.enabled {
-                        ViewingDistanceSetupCard(model: model)
-                    }
-
-                    VStack(alignment: .leading, spacing: 16) {
-                        Text("申请临时使用").font(.title2.bold())
-                        HStack {
-                            Picker("类别", selection: $selectedCategory) {
-                                Text("游戏").tag(ActivityCategory.game)
-                                Text("视频").tag(ActivityCategory.video)
-                            }
-                            .pickerStyle(.segmented)
-                            Picker("时长", selection: $selectedDuration) {
-                                Text("15 分钟").tag(15)
-                                Text("30 分钟").tag(30)
-                                Text("60 分钟").tag(60)
-                            }
-                            .frame(width: 150)
-                            Button("发送申请") {
-                                model.requestTemporaryUse(
-                                    category: selectedCategory,
-                                    durationMinutes: selectedDuration,
-                                    startsAt: scheduleLater ? scheduledStart : nil
-                                )
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(scheduleTooFarAhead)
-                        }
-                        HStack {
-                            Picker("开始方式", selection: $scheduleLater) {
-                                Text("立即开始").tag(false)
-                                Text("预约时间").tag(true)
-                            }
-                            .pickerStyle(.segmented)
-                            .frame(width: 180)
-                            .labelsHidden()
-                            if scheduleLater {
-                                DatePicker(
-                                    "开始时间",
-                                    selection: $scheduledStart,
-                                    displayedComponents: [.date, .hourAndMinute]
-                                )
-                                .labelsHidden()
-                                Text(temporaryWindowText(startsAt: scheduledStart, durationMinutes: selectedDuration))
-                                    .font(.callout)
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("当前前台活动")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 12) {
+                            CategoryIcon(category: model.currentActivity.category)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(model.currentActivity.category.displayName)
+                                    .font(.title2.bold())
+                                Text(model.currentActivity.observation.appName.isEmpty
+                                     ? "没有检测到前台应用"
+                                     : model.currentActivity.observation.appName)
                                     .foregroundStyle(.secondary)
                             }
                         }
-                        if scheduleTooFarAhead {
-                            Text("最多只能预约 14 天以内的时间。")
-                                .font(.footnote)
-                                .foregroundStyle(.orange)
-                        } else {
-                            Text(scheduleLater
-                                 ? "家长批准后，会在预约时间自动生效，到期自动恢复原来的每周时段。"
-                                 : "家长批准后立即生效，到期自动恢复原来的每周时段。")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                        if !model.requests.isEmpty {
-                            Divider()
-                            Text("我的申请").font(.headline)
-                            ForEach(model.requests.prefix(5)) { request in
-                                ChildRequestRow(request: request)
-                            }
-                        }
+                        Text("今日已用 \(formatUsageDuration(model.currentStatus.dailyUsageSeconds))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     .cardStyle()
 
-                    ChildRuleSummary(rules: model.rules, lastSyncAt: model.snapshot.lastRulesSyncAt)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("隐私边界")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Label("不截屏、不记按键", systemImage: "eye.slash")
+                        Label("只在违规时生成事件", systemImage: "list.bullet.rectangle")
+                        Label("事件 30 天后删除", systemImage: "calendar.badge.minus")
+                    }
+                    .cardStyle()
+                }
 
-                    if !model.hasRemoteConfiguration {
-                        ChildPairingForm(model: model)
+                if model.rules.viewingDistancePolicy.enabled {
+                    ViewingDistanceSetupCard(model: model)
+                }
+
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("申请临时使用").font(.title2.bold())
+                    HStack {
+                        Picker("类别", selection: $selectedCategory) {
+                            Text("游戏").tag(ActivityCategory.game)
+                            Text("视频").tag(ActivityCategory.video)
+                        }
+                        .pickerStyle(.segmented)
+                        Picker("时长", selection: $selectedDuration) {
+                            Text("15 分钟").tag(15)
+                            Text("30 分钟").tag(30)
+                            Text("60 分钟").tag(60)
+                        }
+                        .frame(width: 150)
+                        Button("发送申请") {
+                            model.requestTemporaryUse(
+                                category: selectedCategory,
+                                durationMinutes: selectedDuration,
+                                startsAt: scheduleLater ? scheduledStart : nil
+                            )
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(scheduleTooFarAhead)
+                    }
+                    HStack {
+                        Picker("开始方式", selection: $scheduleLater) {
+                            Text("立即开始").tag(false)
+                            Text("预约时间").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 180)
+                        .labelsHidden()
+                        if scheduleLater {
+                            DatePicker(
+                                "开始时间",
+                                selection: $scheduledStart,
+                                displayedComponents: [.date, .hourAndMinute]
+                            )
+                            .labelsHidden()
+                            Text(temporaryWindowText(startsAt: scheduledStart, durationMinutes: selectedDuration))
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if scheduleTooFarAhead {
+                        Text("最多只能预约 14 天以内的时间。")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    } else {
+                        Text(scheduleLater
+                             ? "家长批准后，会在预约时间自动生效，到期自动恢复原来的每周时段。"
+                             : "家长批准后立即生效，到期自动恢复原来的每周时段。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    if !model.requests.isEmpty {
+                        Divider()
+                        Text("我的申请").font(.headline)
+                        ForEach(model.requests.prefix(5)) { request in
+                            ChildRequestRow(request: request)
+                        }
                     }
                 }
-                .padding(28)
-            }
+                .cardStyle()
 
-            if let alert = model.activeAlert {
-                ChildAlertOverlay(alert: alert) { model.activeAlert = nil }
+                ChildRuleSummary(rules: model.rules, lastSyncAt: model.snapshot.lastRulesSyncAt)
+
+                if !model.hasRemoteConfiguration {
+                    ChildPairingForm(model: model)
+                }
             }
+            .padding(28)
         }
     }
 
@@ -439,41 +468,6 @@ private struct ChildPairingForm: View {
         }
         .cardStyle()
         .onAppear { baseURL = model.snapshot.apiBaseURL }
-    }
-}
-
-private struct ChildAlertOverlay: View {
-    let alert: ChildAlert
-    let dismiss: () -> Void
-
-    var body: some View {
-        ZStack {
-            Color.black.opacity(0.35).ignoresSafeArea()
-            VStack(spacing: 20) {
-                Image(systemName: icon)
-                    .font(.system(size: 46))
-                    .foregroundStyle(tint)
-                Text(alert.title).font(.title.bold())
-                Text(alert.message)
-                    .font(.title3)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
-                Button("知道了") { dismiss() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-            }
-            .padding(40)
-            .frame(maxWidth: 420)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
-            .shadow(radius: 30)
-        }
-    }
-
-    private var icon: String {
-        alert.tone == .gentle ? "eye" : "exclamationmark.triangle.fill"
-    }
-    private var tint: Color {
-        alert.tone == .gentle ? .teal : .orange
     }
 }
 
