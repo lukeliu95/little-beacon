@@ -17,6 +17,7 @@ enum BeaconStyle {
 struct BeaconButtonStyle: ButtonStyle {
     enum Kind {
         case primary
+        case selected
         case quiet
         case destructive
     }
@@ -35,7 +36,7 @@ struct BeaconButtonStyle: ButtonStyle {
 
         var body: some View {
             configuration.label
-                .font(.system(size: 14, weight: kind == .primary ? .semibold : .regular))
+                .font(.system(size: 14, weight: kind == .primary || kind == .selected ? .semibold : .regular))
                 .foregroundStyle(foreground)
                 .padding(.horizontal, 14)
                 .frame(minHeight: 32)
@@ -48,7 +49,7 @@ struct BeaconButtonStyle: ButtonStyle {
         private var foreground: Color {
             switch kind {
             case .primary: BeaconStyle.contentBackground
-            case .quiet: .primary
+            case .quiet, .selected: .primary
             case .destructive: Color(red: 155 / 255, green: 44 / 255, blue: 31 / 255)
             }
         }
@@ -56,6 +57,7 @@ struct BeaconButtonStyle: ButtonStyle {
         private var background: Color {
             switch kind {
             case .primary: .primary.opacity(isHovering ? 0.85 : 1)
+            case .selected: .primary.opacity(0.16)
             case .quiet, .destructive: .primary.opacity(isHovering ? 0.11 : 0.07)
             }
         }
@@ -359,7 +361,7 @@ struct DayAxis: Equatable {
     }
 }
 
-private struct DayRail: View {
+struct DayRail: View {
     let outlook: DayOutlook
 
     private var axis: DayAxis {
@@ -601,6 +603,19 @@ private struct WeekScheduleView: View {
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
             }
+            HStack(spacing: 8) {
+                Text("默认提醒方式").font(.system(size: 14, weight: .semibold))
+                ForEach(ReminderStrategy.allCases) { strategy in
+                    Button(strategy.displayName) { model.setDefaultReminderStrategy(strategy) }
+                        .buttonStyle(BeaconButtonStyle(
+                            kind: strategy == model.rules.defaultReminderStrategy ? .selected : .quiet
+                        ))
+                }
+                Spacer()
+                Text("点一段时段，可以单独设置")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+            }
             VStack(spacing: 6) {
                 HStack(spacing: 12) {
                     Color.clear.frame(width: 40, height: 1)
@@ -635,6 +650,7 @@ private struct WeekScheduleView: View {
                 dayName: dayName,
                 schedule: schedule(for: weekday),
                 slot: selectedSlot,
+                defaultStrategy: model.rules.defaultReminderStrategy,
                 appliedMessage: appliedMessage,
                 save: save,
                 add: addSlot,
@@ -834,11 +850,16 @@ private struct ScheduleSlotView: View {
     }
 
     private var label: String {
-        if width >= 86 {
-            return "\(clockText(slot.startMinute))–\(clockText(slot.endMinute))"
-        }
+        let clock = "\(clockText(slot.startMinute))–\(clockText(slot.endMinute))"
         let isOnTheHour = slot.startMinute % 60 == 0 && slot.endMinute % 60 == 0
-        return isOnTheHour && width >= 40 ? "\(slot.startMinute / 60)–\(slot.endMinute / 60)" : ""
+        let hours = "\(slot.startMinute / 60)–\(slot.endMinute / 60)"
+        if let strategy = slot.reminderStrategy?.displayName {
+            if width >= 130 { return "\(clock) · \(strategy)" }
+            if isOnTheHour, width >= 96 { return "\(hours) · \(strategy)" }
+            return width >= 34 ? strategy : ""
+        }
+        if width >= 86 { return clock }
+        return isOnTheHour && width >= 40 ? hours : ""
     }
 
     private func edgeHandle(_ edge: DragEdge) -> some View {
@@ -894,6 +915,7 @@ private struct ScheduleEditor: View {
     let dayName: String
     let schedule: DaySchedule
     let slot: DaySlot?
+    let defaultStrategy: ReminderStrategy
     let appliedMessage: String?
     let save: (DaySlot) -> Void
     let add: () -> Void
@@ -939,6 +961,17 @@ private struct ScheduleEditor: View {
                 .frame(minHeight: 32)
                 .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
             }
+            if let slot {
+                HStack(spacing: 8) {
+                    Text("提醒方式").font(.system(size: 14)).foregroundStyle(.secondary)
+                    Button("跟随默认（\(defaultStrategy.displayName)）") { choose(nil, for: slot) }
+                        .buttonStyle(BeaconButtonStyle(kind: slot.reminderStrategy == nil ? .selected : .quiet))
+                    ForEach(ReminderStrategy.allCases) { strategy in
+                        Button(strategy.displayName) { choose(strategy, for: slot) }
+                            .buttonStyle(BeaconButtonStyle(kind: slot.reminderStrategy == strategy ? .selected : .quiet))
+                    }
+                }
+            }
             if let appliedMessage {
                 Text(appliedMessage)
                     .font(.system(size: 13))
@@ -978,6 +1011,12 @@ private struct ScheduleEditor: View {
             )
             .labelsHidden()
         }
+    }
+
+    private func choose(_ strategy: ReminderStrategy?, for slot: DaySlot) {
+        var updated = slot
+        updated.reminderStrategy = strategy
+        save(updated)
     }
 
     private func loadTimes() {
@@ -1481,7 +1520,7 @@ struct ParentMenuPanel: View {
     }
 }
 
-private struct MenuPanelRow: View {
+struct MenuPanelRow: View {
     let title: String
     let action: () -> Void
     @State private var isHovering = false

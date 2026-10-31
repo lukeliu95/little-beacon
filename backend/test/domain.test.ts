@@ -127,3 +127,28 @@ test("stale rule uploads cannot replace a newer revision", () => {
   assert.equal(shouldAcceptRuleRevision(4, 4), true);
   assert.equal(shouldAcceptRuleRevision(4, 5), true);
 });
+
+test("older rule uploads preserve the default reminder strategy", () => {
+  const merged = mergeMissingRuleSettings({ revision: 3 }, { defaultReminderStrategy: "strict" });
+  assert.equal(merged.defaultReminderStrategy, "strict");
+});
+
+test("unknown reminder strategies are rejected", () => {
+  const rules = defaultRules();
+  assert.equal(validateRuleSet(rules), true);
+  assert.equal(validateRuleSet({ ...rules, defaultReminderStrategy: "severe" }), false);
+});
+
+test("a window may name its own reminder strategy", () => {
+  const rules = defaultRules();
+  const withStrategy = (reminderStrategy: unknown) => ({
+    ...rules,
+    activityRules: rules.activityRules.map((rule) => ({
+      ...rule,
+      windows: rule.windows.map((window) => ({ ...window, reminderStrategy })),
+    })),
+  });
+  assert.equal(validateRuleSet(withStrategy("strict")), true);
+  assert.equal(validateRuleSet(withStrategy(null)), true);
+  assert.equal(validateRuleSet(withStrategy("severe")), false);
+});

@@ -54,17 +54,21 @@ public struct ScheduleWindow: Codable, Equatable, Identifiable, Sendable {
     public var weekday: Int
     public var startMinute: Int
     public var endMinute: Int
+    /// `nil` follows the rule set's default strategy.
+    public var reminderStrategy: ReminderStrategy?
 
     public init(
         id: UUID = UUID(),
         weekday: Int,
         startMinute: Int,
-        endMinute: Int
+        endMinute: Int,
+        reminderStrategy: ReminderStrategy? = nil
     ) {
         self.id = id
         self.weekday = weekday
         self.startMinute = startMinute
         self.endMinute = endMinute
+        self.reminderStrategy = reminderStrategy
     }
 }
 
@@ -103,6 +107,8 @@ public struct RuleSet: Codable, Equatable, Sendable {
     /// Periodic, camera-based "too close to the screen" reminder. Disabled until the
     /// family explicitly enables it and the child Mac completes local calibration.
     public var viewingDistancePolicy: ViewingDistancePolicy
+    /// Used outside any window and by slots that do not pick their own strategy.
+    public var defaultReminderStrategy: ReminderStrategy
 
     public init(
         revision: Int = 1,
@@ -111,7 +117,8 @@ public struct RuleSet: Codable, Equatable, Sendable {
         overrides: [ClassificationOverride] = [],
         pomodoroMode: PomodoroMode = .gentle,
         dailyUsageThresholdSeconds: Int? = 7200,
-        viewingDistancePolicy: ViewingDistancePolicy = .disabled
+        viewingDistancePolicy: ViewingDistancePolicy = .disabled,
+        defaultReminderStrategy: ReminderStrategy = .standard
     ) {
         self.revision = revision
         self.timeZoneIdentifier = timeZoneIdentifier
@@ -120,11 +127,13 @@ public struct RuleSet: Codable, Equatable, Sendable {
         self.pomodoroMode = pomodoroMode
         self.dailyUsageThresholdSeconds = dailyUsageThresholdSeconds
         self.viewingDistancePolicy = viewingDistancePolicy
+        self.defaultReminderStrategy = defaultReminderStrategy
     }
 
     private enum CodingKeys: String, CodingKey {
         case revision, timeZoneIdentifier, activityRules, overrides
         case pomodoroMode, pomodoroEnabled, dailyUsageThresholdSeconds, viewingDistancePolicy
+        case defaultReminderStrategy
     }
 
     // Custom decoding keeps old saved/remote documents (missing the two newest keys) loadable
@@ -143,6 +152,10 @@ public struct RuleSet: Codable, Equatable, Sendable {
             ViewingDistancePolicy.self,
             forKey: .viewingDistancePolicy
         ) ?? .disabled
+        defaultReminderStrategy = try container.decodeIfPresent(
+            ReminderStrategy.self,
+            forKey: .defaultReminderStrategy
+        ) ?? .standard
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -155,6 +168,7 @@ public struct RuleSet: Codable, Equatable, Sendable {
         try container.encode(pomodoroEnabled, forKey: .pomodoroEnabled)
         try container.encodeIfPresent(dailyUsageThresholdSeconds, forKey: .dailyUsageThresholdSeconds)
         try container.encode(viewingDistancePolicy, forKey: .viewingDistancePolicy)
+        try container.encode(defaultReminderStrategy, forKey: .defaultReminderStrategy)
     }
 
     public static var starter: RuleSet {

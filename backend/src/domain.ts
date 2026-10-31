@@ -94,6 +94,7 @@ export function defaultRules() {
       checkIntervalMinutes: 10,
       minimumDistanceCentimeters: 45,
     },
+    defaultReminderStrategy: "standard",
   };
 }
 
@@ -102,7 +103,10 @@ const optionalRuleSettingKeys = [
   "pomodoroMode",
   "dailyUsageThresholdSeconds",
   "viewingDistancePolicy",
+  "defaultReminderStrategy",
 ] as const;
+
+const reminderStrategies = ["gentle", "standard", "strict"];
 
 /**
  * Older clients do not know newer optional rule settings. Preserve those settings when an
@@ -134,6 +138,12 @@ export function validateRuleSet(value: unknown): value is Record<string, unknown
   if (
     rules.pomodoroMode !== undefined
     && !["off", "gentle", "enforced"].includes(String(rules.pomodoroMode))
+  ) {
+    return false;
+  }
+  if (
+    rules.defaultReminderStrategy !== undefined
+    && !reminderStrategies.includes(String(rules.defaultReminderStrategy))
   ) {
     return false;
   }
@@ -179,7 +189,9 @@ export function validateRuleSet(value: unknown): value is Record<string, unknown
         return typeof item.id === "string"
           && Number.isInteger(item.weekday) && Number(item.weekday) >= 1 && Number(item.weekday) <= 7
           && Number.isInteger(item.startMinute) && Number(item.startMinute) >= 0 && Number(item.startMinute) < 1_440
-          && Number.isInteger(item.endMinute) && Number(item.endMinute) >= 0 && Number(item.endMinute) <= 1_440;
+          && Number.isInteger(item.endMinute) && Number(item.endMinute) >= 0 && Number(item.endMinute) <= 1_440
+          && (item.reminderStrategy === undefined || item.reminderStrategy === null
+            || reminderStrategies.includes(String(item.reminderStrategy)));
       });
   });
 }
