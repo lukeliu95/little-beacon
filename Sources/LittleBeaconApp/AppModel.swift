@@ -18,6 +18,9 @@ struct ChildAlert: Identifiable, Equatable {
     let title: String
     let message: String
     let tone: Tone
+    /// Set when this alert may offer the child's own "再玩 5 分钟".
+    var extensionCategory: ActivityCategory?
+    var offersRequest = false
 }
 
 /// "7月22日 16:00" — when a scheduled temporary window begins. Shared by the child
@@ -59,6 +62,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var viewingDistanceStatusMessage = "坐姿距离提醒未开启"
     @Published private(set) var isViewingDistanceBusy = false
     @Published private(set) var pomodoroBreakPhase: PomodoroBreakPhase = .counting(activeSeconds: 0, idleSeconds: 0)
+    @Published private(set) var endingCountdown: EndingCountdown?
+    /// Asks the window layer to bring the child's main window forward.
+    @Published var mainWindowRequest = 0
 
     private let store = LocalStore()
     private let classifier = ActivityClassifier()
@@ -66,6 +72,10 @@ final class AppModel: ObservableObject {
     private let activityMonitor = ActivityMonitor()
     private let viewingDistanceMonitor = ViewingDistanceMonitor()
     private let alertPanel = ChildAlertPanelController()
+    private let toast = ChildToastController()
+    private let dimmer = ScreenDimController()
+    private let reminderShield = ReminderShieldController()
+    private let speech = SpeechService()
     private let presence = ApplicationPresenceController()
     private var violationMachine = ViolationMachine()
     private var pomodoroTimer = PomodoroTimer()
@@ -94,6 +104,33 @@ final class AppModel: ObservableObject {
     var role: DeviceRole { snapshot.role }
     var rules: RuleSet { snapshot.rules }
     var hasViewingDistanceCalibration: Bool { snapshot.viewingDistanceCalibration != nil }
+    var activeGrants: [TemporaryGrant] { snapshot.temporaryGrants + snapshot.extensionGrants }
+
+    var menuBarCountdownClock: String? {
+        guard let endingCountdown else { return nil }
+        return String(format: "%d:%02d", endingCountdown.remainingSeconds / 60, endingCountdown.remainingSeconds % 60)
+    }
+
+    /// Shown beside the lamp in the menu bar during the last stretch.
+    var menuBarCountdownText: String? {
+        guard let endingCountdown, let menuBarCountdownClock else { return nil }
+        return "\(endingCountdown.category.displayName) \(menuBarCountdownClock)"
+    }
+
+    /// The category the child may extend right now, only during finishing time.
+    var extensionCategory: ActivityCategory? {
+        guard let endingCountdown, endingCountdown.isFinishing,
+              extensionsLeft(for: endingCountdown.category) > 0 else { return nil }
+        return endingCountdown.category
+    }
+
+    func extensionsLeft(for category: ActivityCategory) -> Int {
+        let strategy = snapshot.endingMachine.strategy(for: category) ?? snapshot.rules.defaultReminderStrategy
+        return snapshot.extensionLedger.remaining(
+            limit: strategy.plan.dailyExtensions,
+            dayKey: snapshot.dailyUsage.dayKey
+        )
+    }
     var events: [ViolationEvent] { snapshot.events.sorted { $0.startedAt > $1.startedAt } }
     var requests: [TemporaryRequest] { snapshot.requests.sorted { $0.createdAt > $1.createdAt } }
     var pendingRequests: [TemporaryRequest] { requests.filter { $0.status == .pending } }
@@ -211,8 +248,10 @@ final class AppModel: ObservableObject {
                 if let status = response.status { snapshot.currentStatus = status }
                 for event in response.events where !oldEventIDs.contains(event.id) {
                     NotificationService.post(
-                        title: "小灯塔发现违规活动",
-                        body: "\(event.category.displayName) · \(event.appName)"
+                        title: event.isExtensionRecord ? "孩子加了一点时间" : "小灯塔发现违规活动",
+                        body: event.isExtensionRecord
+                            ? event.parentTitle
+                            : "\(event.category.displayName) · \(event.appName)"
                     )
                 }
                 for request in response.requests
@@ -249,6 +288,14 @@ final class AppModel: ObservableObject {
 
     func setSchedule(_ schedule: DaySchedule, category: ActivityCategory, weekday: Int) {
         snapshot.rules.setSchedule(schedule, for: category, weekday: weekday)
+        persist()
+        let rulesToUpload = snapshot.rules
+        Task { await uploadRulesIfPossible(rulesToUpload) }
+    }
+
+    func setDefaultReminderStrategy(_ strategy: ReminderStrategy) {
+        snapshot.rules.defaultReminderStrategy = strategy
+        snapshot.rules.revision += 1
         persist()
         let rulesToUpload = snapshot.rules
         Task { await uploadRulesIfPossible(rulesToUpload) }
@@ -353,6 +400,26 @@ final class AppModel: ObservableObject {
             viewingDistanceStatusMessage = "校准没有完成"
             lastError = error.localizedDescription
         }
+    }
+
+    /// The child's own "再玩 5 分钟". It needs no approval, is limited per day, and the parent
+    /// sees it as an event.
+    func useExtension(category: ActivityCategory) {
+        guard extensionsLeft(for: category) > 0 else { return }
+        let now = Date()
+        snapshot.extensionLedger.record(dayKey: snapshot.dailyUsage.dayKey)
+        snapshot.extensionGrants.append(TemporaryGrant(
+            category: category,
+            startsAt: now,
+            endsAt: now.addingTimeInterval(TimeInterval(ReminderStrategy.extensionMinutes * 60))
+        ))
+        let record = ViolationEvent.extensionRecord(category: category, at: now)
+        snapshot.events.append(record)
+        snapshot.pendingEventIDs.insert(record.id)
+        activeAlert = nil
+        toast.hide()
+        dimmer.hide()
+        persist()
     }
 
     func requestTemporaryUse(category: ActivityCategory, durationMinutes: Int, startsAt: Date? = nil) {
@@ -465,6 +532,13 @@ final class AppModel: ObservableObject {
             activeAlert = nil
         }
         let isEffectivelyIdle = isIdle || breakIsActive
+        let followedCategory = breakIsActive ? ActivityCategory.idle : activity.category
+        let endingStep = snapshot.endingMachine.advance(
+            category: followedCategory,
+            stretch: snapshot.rules.openStretch(for: followedCategory, at: now, grants: activeGrants),
+            at: now
+        )
+        apply(endingStep, activity: activity, now: now)
 
         let previousDayKey = snapshot.dailyUsage.dayKey
         snapshot.dailyUsage.advance(isIdle: isEffectivelyIdle, elapsedSeconds: delta, at: now)
@@ -488,17 +562,18 @@ final class AppModel: ObservableObject {
             )
             process(actions: actions, now: now)
         } else {
-            let allowed = evaluator.isAllowed(
+            let allowed = endingStep.keepsActivityAllowed || evaluator.isAllowed(
                 category: activity.category,
                 at: now,
                 rules: snapshot.rules,
-                temporaryGrants: snapshot.temporaryGrants
+                temporaryGrants: activeGrants
             )
             let actions = violationMachine.advance(
                 activity: activity,
                 isAllowed: allowed,
                 elapsedSeconds: delta,
-                at: now
+                at: now,
+                strategy: snapshot.rules.defaultReminderStrategy
             )
             process(actions: actions, now: now)
         }
@@ -607,7 +682,109 @@ final class AppModel: ObservableObject {
             alertPanel.hide()
             return
         }
-        alertPanel.show(activeAlert) { [weak self] in self?.activeAlert = nil }
+        alertPanel.show(
+            activeAlert,
+            dismiss: { [weak self] in self?.activeAlert = nil },
+            extend: { [weak self] category in self?.useExtension(category: category) },
+            requestMore: { [weak self] in
+                self?.activeAlert = nil
+                self?.mainWindowRequest += 1
+            }
+        )
+    }
+
+    private func apply(_ step: EndingStep, activity: ClassifiedActivity, now: Date) {
+        endingCountdown = step.countdown
+        if step.isDimming {
+            dimmer.show()
+        } else {
+            dimmer.hide()
+        }
+        for action in step.actions {
+            switch action {
+            case let .remind(moment, category, strategy):
+                remind(moment, category: category, strategy: strategy)
+            case let .reportOnly(category):
+                let message = ReminderMessage.finishOver(category: category)
+                reminderShield.show(message)
+                recordEnding(activity: activity, strategy: .gentle, now: now, wasEnforced: false)
+                warningMessage = nil
+            case let .endActivity(category, strategy):
+                dimmer.hide()
+                let succeeded = activityMonitor.enforce(activity)
+                recordEnding(activity: activity, strategy: strategy, now: now, wasEnforced: succeeded)
+                let message = ReminderMessage.activityEnded(category: category)
+                if strategy == .strict {
+                    reminderShield.show(message)
+                } else {
+                    presentAlert(title: message.title, message: message.body, tone: .warning)
+                }
+            }
+        }
+    }
+
+    private func remind(_ moment: EndingMoment, category: ActivityCategory, strategy: ReminderStrategy) {
+        let plan = strategy.plan
+        let signal: ReminderSignal?
+        switch moment {
+        case .fifteenMinutes: signal = plan.fifteenMinuteSignal
+        case .fiveMinutes: signal = plan.fiveMinuteSignal
+        case .timeUp: signal = plan.endSignal
+        }
+        guard let signal else { return }
+        let message = ReminderMessage.of(moment, category: category)
+        var isTimeUp = false
+        if case .timeUp = moment { isTimeUp = true }
+        let extendable = isTimeUp && extensionsLeft(for: category) > 0 ? category : nil
+
+        switch signal.surface {
+        case .corner:
+            toast.show(
+                message,
+                actionTitle: extendable == nil ? nil : "再玩 \(ReminderStrategy.extensionMinutes) 分钟",
+                action: { [weak self] in
+                    if let extendable { self?.useExtension(category: extendable) }
+                }
+            )
+        case .center:
+            activeAlert = ChildAlert(
+                title: message.title,
+                message: message.body,
+                tone: .gentle,
+                extensionCategory: extendable,
+                offersRequest: isTimeUp
+            )
+        case .fullScreen:
+            reminderShield.show(message)
+        }
+        if signal.playsSound {
+            SoundService.playAlert()
+        }
+        if signal.speaks {
+            speech.say(message.spokenText)
+        }
+    }
+
+    /// An ending that ran past its finishing time reaches the parent as an ordinary event.
+    private func recordEnding(
+        activity: ClassifiedActivity,
+        strategy: ReminderStrategy,
+        now: Date,
+        wasEnforced: Bool
+    ) {
+        let plan = strategy.plan
+        let reminders = [plan.fifteenMinuteSignal, plan.fiveMinuteSignal, plan.endSignal].compactMap { $0 }.count
+        let event = ViolationEvent(
+            category: activity.category,
+            appName: activity.observation.appName,
+            normalizedDomain: activity.observation.normalizedDomain,
+            startedAt: now.addingTimeInterval(TimeInterval(-plan.finishSeconds)),
+            durationSeconds: plan.finishSeconds,
+            warningCount: reminders,
+            wasEnforced: wasEnforced
+        )
+        snapshot.events.append(event)
+        snapshot.pendingEventIDs.insert(event.id)
     }
 
     private func presentAlert(
@@ -739,15 +916,20 @@ final class AppModel: ObservableObject {
         for action in actions {
             switch action {
             case let .warning(level, activity):
-                let message: String
-                switch level {
-                case 1: message = "现在不是\(activity.category.displayName)时间，请在 60 秒内离开。"
-                case 2: message = "第二次提醒：请停止\(activity.category.displayName)，家长端将收到通知。"
-                default: message = "最后提醒：60 秒后将结束当前\(activity.category.displayName)活动。"
-                }
+                let strategy = snapshot.rules.defaultReminderStrategy
+                let message = outsideWarningText(level: level, category: activity.category, strategy: strategy)
+                let signal = level == 1 ? strategy.plan.outsideFirstSignal : strategy.plan.outsideSecondSignal
                 warningMessage = message
                 NotificationService.post(title: "小灯塔提醒", body: message, identifier: "warning-\(level)")
-                presentAlert(title: "小灯塔提醒", message: message, tone: .warning)
+                if signal.surface == .fullScreen {
+                    reminderShield.show(ReminderMessage(title: "小灯塔提醒", body: message))
+                    SoundService.playAlert()
+                } else {
+                    presentAlert(title: "小灯塔提醒", message: message, tone: .warning)
+                }
+                if signal.speaks {
+                    speech.say(message)
+                }
             case let .beginEvent(activity, startedAt):
                 let event = ViolationEvent(
                     category: activity.category,
@@ -766,7 +948,7 @@ final class AppModel: ObservableObject {
                 if let id = activeEventID,
                    let index = snapshot.events.firstIndex(where: { $0.id == id }) {
                     snapshot.events[index].wasEnforced = succeeded
-                    snapshot.events[index].warningCount = 3
+                    snapshot.events[index].warningCount = violationMachine.state?.warningCount ?? 3
                     snapshot.pendingEventIDs.insert(id)
                 }
             case .reset:

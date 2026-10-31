@@ -51,47 +51,54 @@ struct LittleBeaconApp: App {
             }
         }
 
-        MenuBarExtra("小灯塔", systemImage: "light.beacon.max.fill", isInserted: .constant(model.role != .parent)) {
-            MenuBarContent(model: model, updates: updates)
-        }
-
-        MenuBarExtra("小灯塔", systemImage: "light.beacon.max.fill", isInserted: .constant(model.role == .parent)) {
-            ParentMenuPanel(model: model)
+        MenuBarExtra {
+            MenuPanelRoot(model: model, updates: updates)
+        } label: {
+            MenuBarLabel(model: model)
         }
         .menuBarExtraStyle(.window)
     }
 }
 
-private struct MenuBarContent: View {
+private struct MenuPanelRoot: View {
     @ObservedObject var model: AppModel
     @ObservedObject var updates: UpdateController
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("小灯塔正在运行", systemImage: "checkmark.shield")
-                .font(.headline)
-            if model.role == .child {
-                Text("当前：\(model.currentActivity.category.displayName)")
-                if let warning = model.warningMessage {
-                    Text(warning).foregroundStyle(.orange)
-                }
-                Button("打开小灯塔") { showMainWindow(openWindow) }
-            } else if model.role == .parent {
-                Text(model.connectionMessage)
-            } else {
-                Text("请打开主窗口完成设置")
+        switch model.role {
+        case .parent:
+            ParentMenuPanel(model: model)
+        case .child:
+            ChildMenuPanel(model: model, updates: updates)
+        case .unconfigured:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("小灯塔还没有设置")
+                    .font(.system(size: 15, weight: .semibold))
+                MenuPanelRow(title: "打开小灯塔") { showMainWindow(openWindow) }
             }
-            Divider()
-            Button("立即同步") { Task { await model.syncNow() } }
-            Button("检查更新…") { updates.checkForUpdates() }
-                .disabled(!updates.canCheckForUpdates)
-            if model.role == .child {
-                Divider()
-                Button("退出小灯塔…") { NSApp.terminate(nil) }
+            .padding(14)
+            .frame(width: 280)
+        }
+    }
+}
+
+/// The lamp, plus the countdown during the last stretch. This view lives as long as the app, so
+/// it is also what brings the window forward when an alert asks for it.
+private struct MenuBarLabel: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "light.beacon.max.fill")
+            if let countdown = model.menuBarCountdownText {
+                Text(countdown).monospacedDigit()
             }
         }
-        .padding(10)
-        .frame(width: 280)
+        .accessibilityLabel(model.menuBarCountdownText ?? "小灯塔")
+        .onChange(of: model.mainWindowRequest) { _, _ in
+            showMainWindow(openWindow)
+        }
     }
 }

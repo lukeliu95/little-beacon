@@ -44,7 +44,12 @@ public struct DayOutlook: Equatable, Sendable {
     public var game: CategoryOutlook
     public var video: CategoryOutlook
 
-    public init(rules: RuleSet, requests: [TemporaryRequest], at date: Date) {
+    public init(
+        rules: RuleSet,
+        requests: [TemporaryRequest],
+        grants: [TemporaryGrant] = [],
+        at date: Date
+    ) {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: rules.timeZoneIdentifier) ?? .current
         let weekday = calendar.component(.weekday, from: date)
@@ -59,9 +64,12 @@ public struct DayOutlook: Equatable, Sendable {
             let granted = requests
                 .filter { $0.category == category && $0.status == .approved }
                 .compactMap { Self.span(of: $0, dayStart: dayStart) }
+            let direct = grants
+                .filter { $0.category == category }
+                .compactMap { Self.span(of: $0, dayStart: dayStart) }
             return CategoryOutlook(
                 category: category,
-                spans: Self.merged(weekly + granted),
+                spans: Self.merged(weekly + granted + direct),
                 nowMinute: nowMinute
             )
         }
@@ -112,6 +120,13 @@ public struct DayOutlook: Equatable, Sendable {
         return DaySpan(startMinute: max(0, startMinute), endMinute: min(1_440, endMinute))
     }
 
+    private static func span(of grant: TemporaryGrant, dayStart: Date) -> DaySpan? {
+        let startMinute = Int(grant.startsAt.timeIntervalSince(dayStart) / 60)
+        let endMinute = Int(grant.endsAt.timeIntervalSince(dayStart) / 60)
+        guard endMinute > 0, startMinute < 1_440 else { return nil }
+        return DaySpan(startMinute: max(0, startMinute), endMinute: min(1_440, endMinute))
+    }
+
     private static func merged(_ spans: [DaySpan]) -> [DaySpan] {
         var result: [DaySpan] = []
         for span in spans.sorted(by: { $0.startMinute < $1.startMinute }) where span.endMinute > span.startMinute {
@@ -152,11 +167,15 @@ public func deviceHeadline(status: DeviceStatus, outlook: DayOutlook) -> String 
 
 public extension ViolationEvent {
     var parentTitle: String {
+        guard !isExtensionRecord else {
+            return "孩子用了一次“再玩 \(ReminderStrategy.extensionMinutes) 分钟” · \(category.displayName)"
+        }
         let action = category == .game ? "玩游戏" : "看视频"
         return "不在时段内\(action) · \(normalizedDomain ?? appName)"
     }
 
     var parentOutcome: String {
+        guard !isExtensionRecord else { return "孩子自己加的时间" }
         guard wasEnforced else {
             return "提醒 \(warningCount) 次，持续 \(durationSeconds / 60) 分 \(durationSeconds % 60) 秒"
         }

@@ -20,6 +20,11 @@ struct LocalSnapshot: Codable {
     var dailyUsageNudgeShown = false
     /// Device-local geometric calibration only; never included in family-rule sync.
     var viewingDistanceCalibration: ViewingDistanceCalibration?
+    /// Survives a restart so an unfinished ending is neither repeated nor treated as a violation.
+    var endingMachine = EndingMachine()
+    /// "再玩 5 分钟" grants live apart from `temporaryGrants`, which every sync replaces.
+    var extensionGrants: [TemporaryGrant] = []
+    var extensionLedger = ExtensionLedger()
 
     init() {}
 
@@ -27,6 +32,7 @@ struct LocalSnapshot: Codable {
         case role, deviceName, apiBaseURL, householdID, deviceID, rules, temporaryGrants
         case requests, events, pendingEventIDs, currentStatus, monitoringEnabled, lastRulesSyncAt
         case dailyUsage, dailyUsageNudgeShown, viewingDistanceCalibration
+        case endingMachine, extensionGrants, extensionLedger
     }
 
     // Custom decoding: a real family's existing state.json predates dailyUsage/dailyUsageNudgeShown.
@@ -53,12 +59,16 @@ struct LocalSnapshot: Codable {
             ViewingDistanceCalibration.self,
             forKey: .viewingDistanceCalibration
         )
+        endingMachine = try container.decodeIfPresent(EndingMachine.self, forKey: .endingMachine) ?? EndingMachine()
+        extensionGrants = try container.decodeIfPresent([TemporaryGrant].self, forKey: .extensionGrants) ?? []
+        extensionLedger = try container.decodeIfPresent(ExtensionLedger.self, forKey: .extensionLedger) ?? ExtensionLedger()
     }
 
     mutating func prune(now: Date = Date()) {
         events.removeAll { $0.expiresAt <= now }
         pendingEventIDs.formIntersection(events.map(\.id))
         temporaryGrants.removeAll { $0.endsAt <= now }
+        extensionGrants.removeAll { $0.endsAt <= now }
     }
 }
 

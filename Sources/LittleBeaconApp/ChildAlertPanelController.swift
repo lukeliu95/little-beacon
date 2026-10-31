@@ -1,4 +1,5 @@
 import AppKit
+import LittleBeaconCore
 import SwiftUI
 
 private final class ChildAlertPanel: NSPanel {
@@ -10,9 +11,19 @@ private final class ChildAlertPanel: NSPanel {
 final class ChildAlertPanelController {
     private var panel: ChildAlertPanel?
 
-    func show(_ alert: ChildAlert, dismiss: @escaping @MainActor () -> Void) {
+    func show(
+        _ alert: ChildAlert,
+        dismiss: @escaping @MainActor () -> Void,
+        extend: @escaping @MainActor (ActivityCategory) -> Void = { _ in },
+        requestMore: @escaping @MainActor () -> Void = {}
+    ) {
         hide()
-        let content = NSHostingView(rootView: ChildAlertCard(alert: alert, dismiss: dismiss))
+        let content = NSHostingView(rootView: ChildAlertCard(
+            alert: alert,
+            dismiss: dismiss,
+            extend: extend,
+            requestMore: requestMore
+        ))
         let panel = ChildAlertPanel(
             contentRect: NSRect(origin: .zero, size: content.fittingSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -65,6 +76,8 @@ final class ChildAlertPanelController {
 private struct ChildAlertCard: View {
     let alert: ChildAlert
     let dismiss: () -> Void
+    let extend: (ActivityCategory) -> Void
+    let requestMore: () -> Void
 
     var body: some View {
         VStack(spacing: 20) {
@@ -77,9 +90,18 @@ private struct ChildAlertCard: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(.secondary)
-            Button("知道了") { dismiss() }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+            HStack(spacing: 8) {
+                if let category = alert.extensionCategory {
+                    Button("再玩 \(ReminderStrategy.extensionMinutes) 分钟") { extend(category) }
+                        .buttonStyle(BeaconButtonStyle())
+                }
+                if alert.offersRequest {
+                    Button("申请多玩") { requestMore() }
+                        .buttonStyle(BeaconButtonStyle())
+                }
+                Button("知道了") { dismiss() }
+                    .buttonStyle(BeaconButtonStyle(kind: .primary))
+            }
         }
         .padding(40)
         .frame(width: 420)

@@ -5,11 +5,18 @@ public struct DaySlot: Equatable, Identifiable, Sendable {
     public var id: UUID
     public var startMinute: Int
     public var endMinute: Int
+    public var reminderStrategy: ReminderStrategy?
 
-    public init(id: UUID = UUID(), startMinute: Int, endMinute: Int) {
+    public init(
+        id: UUID = UUID(),
+        startMinute: Int,
+        endMinute: Int,
+        reminderStrategy: ReminderStrategy? = nil
+    ) {
         self.id = id
         self.startMinute = startMinute
         self.endMinute = endMinute
+        self.reminderStrategy = reminderStrategy
     }
 
     public var length: Int { endMinute - startMinute }
@@ -40,22 +47,27 @@ public struct DaySchedule: Equatable, Sendable {
         let room = room(around: slot)
         let start = Self.snapped(slot.startMinute + delta)
         let clamped = min(room.upperBound - slot.length, max(room.lowerBound, start))
-        return DaySlot(id: slot.id, startMinute: clamped, endMinute: clamped + slot.length)
+        var moved = slot
+        moved.startMinute = clamped
+        moved.endMinute = clamped + slot.length
+        return moved
     }
 
     /// Dragging snaps; a time typed into a field is kept to the minute.
     public func resizedStart(_ slot: DaySlot, toMinute minute: Int, snapping: Bool = true) -> DaySlot {
         let room = room(around: slot)
         let latest = slot.endMinute - Self.minimumMinutes
-        let start = min(latest, max(room.lowerBound, snapping ? Self.snapped(minute) : minute))
-        return DaySlot(id: slot.id, startMinute: start, endMinute: slot.endMinute)
+        var resized = slot
+        resized.startMinute = min(latest, max(room.lowerBound, snapping ? Self.snapped(minute) : minute))
+        return resized
     }
 
     public func resizedEnd(_ slot: DaySlot, toMinute minute: Int, snapping: Bool = true) -> DaySlot {
         let room = room(around: slot)
         let earliest = slot.startMinute + Self.minimumMinutes
-        let end = max(earliest, min(room.upperBound, snapping ? Self.snapped(minute) : minute))
-        return DaySlot(id: slot.id, startMinute: slot.startMinute, endMinute: end)
+        var resized = slot
+        resized.endMinute = max(earliest, min(room.upperBound, snapping ? Self.snapped(minute) : minute))
+        return resized
     }
 
     /// A slot drawn from where the pointer went down to where it is now. Drawing stops at the
@@ -118,11 +130,26 @@ public struct DaySchedule: Equatable, Sendable {
     /// so it is edited as the two stretches it really is.
     private static func slots(of window: ScheduleWindow) -> [DaySlot] {
         guard window.startMinute > window.endMinute else {
-            return [DaySlot(id: window.id, startMinute: window.startMinute, endMinute: window.endMinute)]
+            return [DaySlot(
+                id: window.id,
+                startMinute: window.startMinute,
+                endMinute: window.endMinute,
+                reminderStrategy: window.reminderStrategy
+            )]
         }
         return [
-            DaySlot(id: siblingID(of: window.id), startMinute: 0, endMinute: window.endMinute),
-            DaySlot(id: window.id, startMinute: window.startMinute, endMinute: dayMinutes),
+            DaySlot(
+                id: siblingID(of: window.id),
+                startMinute: 0,
+                endMinute: window.endMinute,
+                reminderStrategy: window.reminderStrategy
+            ),
+            DaySlot(
+                id: window.id,
+                startMinute: window.startMinute,
+                endMinute: dayMinutes,
+                reminderStrategy: window.reminderStrategy
+            ),
         ]
     }
 
@@ -140,7 +167,8 @@ public struct DaySchedule: Equatable, Sendable {
                 DaySlot(
                     id: $0.id,
                     startMinute: max(0, $0.startMinute),
-                    endMinute: min(dayMinutes, $0.endMinute)
+                    endMinute: min(dayMinutes, $0.endMinute),
+                    reminderStrategy: $0.reminderStrategy
                 )
             }
             .filter { $0.endMinute > $0.startMinute }
@@ -167,7 +195,13 @@ public extension RuleSet {
         guard let index = activityRules.firstIndex(where: { $0.category == category }) else { return }
         activityRules[index].windows.removeAll { $0.weekday == weekday }
         activityRules[index].windows += schedule.slots.map {
-            ScheduleWindow(id: $0.id, weekday: weekday, startMinute: $0.startMinute, endMinute: $0.endMinute)
+            ScheduleWindow(
+                id: $0.id,
+                weekday: weekday,
+                startMinute: $0.startMinute,
+                endMinute: $0.endMinute,
+                reminderStrategy: $0.reminderStrategy
+            )
         }
         revision += 1
     }
@@ -181,7 +215,12 @@ public extension RuleSet {
         activityRules[index].windows.removeAll { targets.contains($0.weekday) }
         activityRules[index].windows += targets.flatMap { weekday in
             schedule.slots.map {
-                ScheduleWindow(weekday: weekday, startMinute: $0.startMinute, endMinute: $0.endMinute)
+                ScheduleWindow(
+                    weekday: weekday,
+                    startMinute: $0.startMinute,
+                    endMinute: $0.endMinute,
+                    reminderStrategy: $0.reminderStrategy
+                )
             }
         }
         revision += 1

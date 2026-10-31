@@ -153,9 +153,11 @@ public struct ViolationMachine: Sendable {
         activity: ClassifiedActivity,
         isAllowed: Bool,
         elapsedSeconds: TimeInterval,
-        at date: Date
+        at date: Date,
+        strategy: ReminderStrategy = .standard
     ) -> [ViolationAction] {
         let delta = max(0, elapsedSeconds)
+        let plan = strategy.plan
         let isRestricted = activity.category == .game || activity.category == .video
 
         guard isRestricted && !isAllowed else {
@@ -184,11 +186,13 @@ public struct ViolationMachine: Sendable {
             actions.append(.warning(level: 2, activity: activity))
             actions.append(.beginEvent(activity: activity, startedAt: current.startedAt))
         }
-        if current.activeSeconds >= 120 && current.warningCount < 3 {
+        if let lastWarning = plan.lastWarningSeconds,
+           current.activeSeconds >= TimeInterval(lastWarning),
+           current.warningCount < 3 {
             current.warningCount = 3
             actions.append(.warning(level: 3, activity: activity))
         }
-        if current.activeSeconds >= 180 {
+        if let enforceAfter = plan.enforceAfterSeconds, current.activeSeconds >= TimeInterval(enforceAfter) {
             let key = activity.observation.stableKey
             if !current.enforcedActivityKeys.contains(key) {
                 current.enforcedActivityKeys.insert(key)
