@@ -20,4 +20,4 @@ launchctl bootout "gui/$UID/app.littlebeacon.mac" 2>/dev/null || true
 launchctl bootstrap "gui/$UID" "$PLIST"
 launchctl enable "gui/$UID/app.littlebeacon.mac"
 
-echo "小灯塔已设置为登录启动，并会在异常退出后恢复。"
+echo "小灯塔已设置为登录启动，被结束或退出后都会自动恢复。"

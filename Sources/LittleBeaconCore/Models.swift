@@ -109,6 +109,8 @@ public struct RuleSet: Codable, Equatable, Sendable {
     public var viewingDistancePolicy: ViewingDistancePolicy
     /// Used outside any window and by slots that do not pick their own strategy.
     public var defaultReminderStrategy: ReminderStrategy
+    /// School hours in which only the gentle eye-care reminder runs. Off by default.
+    public var schoolQuietHours: QuietHours
 
     public init(
         revision: Int = 1,
@@ -118,7 +120,8 @@ public struct RuleSet: Codable, Equatable, Sendable {
         pomodoroMode: PomodoroMode = .gentle,
         dailyUsageThresholdSeconds: Int? = 7200,
         viewingDistancePolicy: ViewingDistancePolicy = .disabled,
-        defaultReminderStrategy: ReminderStrategy = .standard
+        defaultReminderStrategy: ReminderStrategy = .standard,
+        schoolQuietHours: QuietHours = .schoolDefault
     ) {
         self.revision = revision
         self.timeZoneIdentifier = timeZoneIdentifier
@@ -128,12 +131,13 @@ public struct RuleSet: Codable, Equatable, Sendable {
         self.dailyUsageThresholdSeconds = dailyUsageThresholdSeconds
         self.viewingDistancePolicy = viewingDistancePolicy
         self.defaultReminderStrategy = defaultReminderStrategy
+        self.schoolQuietHours = schoolQuietHours
     }
 
     private enum CodingKeys: String, CodingKey {
         case revision, timeZoneIdentifier, activityRules, overrides
         case pomodoroMode, pomodoroEnabled, dailyUsageThresholdSeconds, viewingDistancePolicy
-        case defaultReminderStrategy
+        case defaultReminderStrategy, schoolQuietHours
     }
 
     // Custom decoding keeps old saved/remote documents (missing the two newest keys) loadable
@@ -156,6 +160,7 @@ public struct RuleSet: Codable, Equatable, Sendable {
             ReminderStrategy.self,
             forKey: .defaultReminderStrategy
         ) ?? .standard
+        schoolQuietHours = try container.decodeIfPresent(QuietHours.self, forKey: .schoolQuietHours) ?? .schoolDefault
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -169,6 +174,7 @@ public struct RuleSet: Codable, Equatable, Sendable {
         try container.encodeIfPresent(dailyUsageThresholdSeconds, forKey: .dailyUsageThresholdSeconds)
         try container.encode(viewingDistancePolicy, forKey: .viewingDistancePolicy)
         try container.encode(defaultReminderStrategy, forKey: .defaultReminderStrategy)
+        try container.encode(schoolQuietHours, forKey: .schoolQuietHours)
     }
 
     public static var starter: RuleSet {

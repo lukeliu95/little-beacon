@@ -26,6 +26,11 @@ struct LittleBeaconApp: App {
     @StateObject private var model = AppModel()
     @StateObject private var updates = UpdateController()
 
+    init() {
+        // Before AppModel exists, so a duplicate copy never touches the saved state or timers.
+        SingleInstanceGuard.enforce()
+    }
+
     var body: some Scene {
         WindowGroup("小灯塔", id: mainWindowID) {
             RootView(model: model)

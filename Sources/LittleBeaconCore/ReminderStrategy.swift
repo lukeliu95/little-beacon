@@ -459,6 +459,7 @@ public extension ViolationEvent {
 
 /// The child's first line: how long is left when something is open, otherwise when it opens.
 public func childHeadline(outlook: DayOutlook, activity: ActivityCategory) -> String {
+    guard !outlook.isQuietNow else { return outlook.summary }
     let preferred: CategoryOutlook? = {
         if activity == .video, outlook.video.isOpenNow { return outlook.video }
         if outlook.game.isOpenNow { return outlook.game }

@@ -366,11 +366,14 @@ struct DayRail: View {
     let outlook: DayOutlook
 
     private var axis: DayAxis {
-        DayAxis(spans: outlook.game.spans + outlook.video.spans)
+        DayAxis(spans: outlook.game.spans + outlook.video.spans + (outlook.quiet.map { [$0] } ?? []))
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let quiet = outlook.quiet {
+                schoolLane(quiet)
+            }
             lane(outlook.game)
             lane(outlook.video)
             HStack(spacing: 12) {
@@ -406,6 +409,34 @@ struct DayRail: View {
             .frame(height: 26)
             .accessibilityElement()
             .accessibilityLabel(laneDescription(category))
+        }
+    }
+
+    /// Grey, not lamp-coloured: the lamp only ever means "this time is open".
+    private func schoolLane(_ span: DaySpan) -> some View {
+        HStack(spacing: 12) {
+            Text("上学")
+                .font(.system(size: 14))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .leading)
+            GeometryReader { proxy in
+                ZStack(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 6).fill(BeaconStyle.trackFill)
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.primary.opacity(0.22))
+                        .frame(width: proxy.size.width * (axis.fraction(span.endMinute) - axis.fraction(span.startMinute)))
+                        .offset(x: proxy.size.width * axis.fraction(span.startMinute))
+                }
+                .overlay(alignment: .topLeading) {
+                    Rectangle()
+                        .fill(.primary)
+                        .frame(width: 2, height: proxy.size.height + 10)
+                        .offset(x: proxy.size.width * axis.fraction(outlook.nowMinute) - 1, y: -5)
+                }
+            }
+            .frame(height: 26)
+            .accessibilityElement()
+            .accessibilityLabel("上学时段 \(clockText(span.startMinute)) 到 \(clockText(span.endMinute))，只提醒休息眼睛")
         }
     }
 
@@ -556,7 +587,9 @@ private struct RulesView: View {
                 .frame(width: 300)
             }
             switch tab {
-            case .schedule: WeekScheduleView(model: model)
+            case .schedule:
+                SchoolHoursSection(model: model)
+                WeekScheduleView(model: model)
             case .care: CareRulesView(model: model)
             case .apps: AppRulesView(model: model)
             }
@@ -1041,6 +1074,89 @@ private struct ScheduleEditor: View {
 
     private static func minutes(from date: Date) -> Int {
         Calendar.current.component(.hour, from: date) * 60 + Calendar.current.component(.minute, from: date)
+    }
+}
+
+/// School hours (ADR-0017): only the gentle 25-minute reminder runs inside them.
+private struct SchoolHoursSection: View {
+    @ObservedObject var model: AppModel
+
+    private static let days = [(2, "一"), (3, "二"), (4, "三"), (5, "四"), (6, "五"), (7, "六"), (1, "日")]
+
+    private var hours: QuietHours { model.rules.schoolQuietHours }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SettingRow(
+                title: "上学时段",
+                detail: "这段时间只提醒休息眼睛，不管游戏和视频，也不通知你"
+            ) {
+                Toggle("上学时段", isOn: Binding(
+                    get: { hours.enabled },
+                    set: { enabled in update { $0.enabled = enabled } }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(.primary)
+            }
+            if hours.enabled {
+                HStack(spacing: 6) {
+                    ForEach(Self.days, id: \.0) { day, name in
+                        Button(name) { toggle(day) }
+                            .buttonStyle(BeaconButtonStyle(kind: hours.weekdays.contains(day) ? .primary : .quiet))
+                            .accessibilityLabel("周\(name)")
+                    }
+                    Color.clear.frame(width: 18, height: 1)
+                    timeField("从", minute: hours.startMinute) { minute in update { $0.startMinute = minute } }
+                    timeField("到", minute: hours.endMinute) { minute in update { $0.endMinute = minute } }
+                    Spacer()
+                }
+            }
+            Rectangle().fill(BeaconStyle.hairline).frame(height: 1)
+        }
+    }
+
+    private func update(_ change: (inout QuietHours) -> Void) {
+        var updated = hours
+        change(&updated)
+        model.setSchoolQuietHours(updated)
+    }
+
+    /// At least one day stays chosen, otherwise the switch would be on with nothing to do.
+    private func toggle(_ day: Int) {
+        update { hours in
+            if let index = hours.weekdays.firstIndex(of: day) {
+                guard hours.weekdays.count > 1 else { return }
+                hours.weekdays.remove(at: index)
+            } else {
+                hours.weekdays.append(day)
+                hours.weekdays.sort()
+            }
+        }
+    }
+
+    private func timeField(_ label: String, minute: Int, set: @escaping (Int) -> Void) -> some View {
+        HStack(spacing: 6) {
+            Text(label).font(.system(size: 14)).foregroundStyle(.secondary)
+            DatePicker(
+                label,
+                selection: Binding(
+                    get: {
+                        let shown = min(minute, DaySchedule.dayMinutes - 1)
+                        return Calendar.current.date(
+                            bySettingHour: shown / 60, minute: shown % 60, second: 0, of: Date()
+                        ) ?? Date()
+                    },
+                    set: { date in
+                        let calendar = Calendar.current
+                        // An end before the start is ignored and the field snaps back.
+                        set(calendar.component(.hour, from: date) * 60 + calendar.component(.minute, from: date))
+                    }
+                ),
+                displayedComponents: .hourAndMinute
+            )
+            .labelsHidden()
+        }
     }
 }
 

@@ -257,3 +257,32 @@ test("a window may name its own reminder strategy", () => {
   assert.equal(validateRuleSet(withStrategy(null)), true);
   assert.equal(validateRuleSet(withStrategy("severe")), false);
 });
+
+test("school hours are off by default and malformed school hours are rejected", () => {
+  const rules = defaultRules();
+  assert.equal(rules.schoolQuietHours.enabled, false);
+  assert.deepEqual(rules.schoolQuietHours.weekdays, [2, 3, 4, 5, 6]);
+  assert.equal(validateRuleSet(rules), true);
+
+  const backwards = structuredClone(rules);
+  backwards.schoolQuietHours.startMinute = 18 * 60;
+  backwards.schoolQuietHours.endMinute = 8 * 60;
+  assert.equal(validateRuleSet(backwards), false);
+
+  const noSuchDay = structuredClone(rules);
+  noSuchDay.schoolQuietHours.weekdays = [0];
+  assert.equal(validateRuleSet(noSuchDay), false);
+
+  assert.equal(validateRuleSet({ ...rules, schoolQuietHours: "always" }), false);
+});
+
+test("older rule uploads preserve school hours they do not understand", () => {
+  const current = defaultRules();
+  current.schoolQuietHours.enabled = true;
+  const incoming = structuredClone(current) as Record<string, unknown>;
+  delete incoming.schoolQuietHours;
+  incoming.revision = 2;
+
+  const merged = mergeMissingRuleSettings(incoming, current);
+  assert.deepEqual(merged.schoolQuietHours, current.schoolQuietHours);
+});

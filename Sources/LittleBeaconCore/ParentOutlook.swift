@@ -43,6 +43,13 @@ public struct DayOutlook: Equatable, Sendable {
     public var nowMinute: Int
     public var game: CategoryOutlook
     public var video: CategoryOutlook
+    /// Today's school hours, when the parent has turned them on.
+    public var quiet: DaySpan?
+
+    public var isQuietNow: Bool {
+        guard let quiet else { return false }
+        return nowMinute >= quiet.startMinute && nowMinute < quiet.endMinute
+    }
 
     public init(
         rules: RuleSet,
@@ -76,6 +83,7 @@ public struct DayOutlook: Equatable, Sendable {
 
         game = outlook(for: .game)
         video = outlook(for: .video)
+        quiet = rules.schoolQuietHours.span(onWeekday: weekday)
     }
 
     public func isOpen(_ category: ActivityCategory) -> Bool {
@@ -87,6 +95,9 @@ public struct DayOutlook: Equatable, Sendable {
     }
 
     public var summary: String {
+        if isQuietNow, let quiet {
+            return "上学时段，到 \(clockText(quiet.endMinute)) 只提醒休息眼睛"
+        }
         if let closesAt = game.closesAtMinute, closesAt == video.closesAtMinute {
             return "游戏和视频开放到 \(clockText(closesAt))"
         }
@@ -155,8 +166,10 @@ public func deviceHeadline(status: DeviceStatus, outlook: DayOutlook) -> String 
     guard status.isOnline else { return "孩子的 Mac 离线" }
     switch status.category {
     case .game:
+        if outlook.isQuietNow { return "孩子的 Mac 在线，上学时段在玩游戏" }
         return outlook.game.isOpenNow ? "孩子的 Mac 在线，正在玩游戏" : "孩子正在玩游戏，现在不在允许时段"
     case .video:
+        if outlook.isQuietNow { return "孩子的 Mac 在线，上学时段在看视频" }
         return outlook.video.isOpenNow ? "孩子的 Mac 在线，正在看视频" : "孩子正在看视频，现在不在允许时段"
     case .other:
         return "孩子的 Mac 在线，正在用其他应用"

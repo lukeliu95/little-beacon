@@ -130,6 +130,14 @@ enum AutoStartManager {
             return "开发模式：打包后启用自动启动"
         }
         do {
+            // With the LaunchAgent installed, launchd starts the app at login. A login item as
+            // well would start a second copy that the single-instance guard has to kill.
+            if readAutoRecoveryState() != .missing {
+                if SMAppService.mainApp.status == .enabled {
+                    try SMAppService.mainApp.unregister()
+                }
+                return "已由后台服务设置登录时启动"
+            }
             if SMAppService.mainApp.status != .enabled {
                 try SMAppService.mainApp.register()
             }
