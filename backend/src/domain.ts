@@ -100,6 +100,13 @@ export function defaultRules() {
       minimumDistanceCentimeters: 45,
     },
     defaultReminderStrategy: "standard",
+    // School hours: only the gentle eye-care reminder runs inside them. Off until a parent turns it on.
+    schoolQuietHours: {
+      enabled: false,
+      weekdays: [2, 3, 4, 5, 6],
+      startMinute: 8 * 60,
+      endMinute: 18 * 60,
+    },
   };
 }
 
@@ -109,6 +116,7 @@ const optionalRuleSettingKeys = [
   "dailyUsageThresholdSeconds",
   "viewingDistancePolicy",
   "defaultReminderStrategy",
+  "schoolQuietHours",
 ] as const;
 
 const reminderStrategies = ["gentle", "standard", "strict"];
@@ -130,6 +138,17 @@ export function mergeMissingRuleSettings(
     }
   }
   return merged;
+}
+
+function isValidQuietHours(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const hours = value as Record<string, unknown>;
+  return typeof hours.enabled === "boolean"
+    && Array.isArray(hours.weekdays)
+    && hours.weekdays.every((day) => Number.isInteger(day) && Number(day) >= 1 && Number(day) <= 7)
+    && Number.isInteger(hours.startMinute) && Number(hours.startMinute) >= 0
+    && Number.isInteger(hours.endMinute) && Number(hours.endMinute) <= 1_440
+    && Number(hours.startMinute) < Number(hours.endMinute);
 }
 
 export function validateRuleSet(value: unknown): value is Record<string, unknown> {
@@ -184,6 +203,7 @@ export function validateRuleSet(value: unknown): value is Record<string, unknown
       return false;
     }
   }
+  if (rules.schoolQuietHours !== undefined && !isValidQuietHours(rules.schoolQuietHours)) return false;
   return rules.activityRules.every((rule) => {
     if (!rule || typeof rule !== "object") return false;
     const candidate = rule as Record<string, unknown>;

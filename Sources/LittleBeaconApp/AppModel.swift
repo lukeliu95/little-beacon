@@ -59,6 +59,7 @@ final class AppModel: ObservableObject {
     @Published var isBusy = false
     @Published var lastError: String?
     @Published var autoStartMessage = ""
+    @Published private(set) var autoRecoveryState: AutoRecoveryState = .missing
     @Published private(set) var viewingDistanceStatusMessage = "坐姿距离提醒未开启"
     @Published private(set) var isViewingDistanceBusy = false
     @Published private(set) var pomodoroBreakPhase: PomodoroBreakPhase = .counting(activeSeconds: 0, idleSeconds: 0)
@@ -97,11 +98,12 @@ final class AppModel: ObservableObject {
     init() {
         snapshot = store.load()
         snapshot.remoteControl.resumeAfterRestart()
-        pomodoroModeAtLastTick = snapshot.rules.pomodoroMode
+        pomodoroModeAtLastTick = snapshot.rules.pomodoroMode(at: Date())
         applyPresence()
         configurePomodoroCoordinator()
         NotificationService.requestAuthorization()
         autoStartMessage = AutoStartManager.registerIfPossible()
+        autoRecoveryState = readAutoRecoveryState()
         refreshViewingDistanceStatus()
         startServices()
     }
@@ -512,6 +514,15 @@ final class AppModel: ObservableObject {
         Task { await uploadRulesIfPossible(rulesToUpload) }
     }
 
+    func setSchoolQuietHours(_ quietHours: QuietHours) {
+        guard quietHours.isValid, quietHours != snapshot.rules.schoolQuietHours else { return }
+        snapshot.rules.schoolQuietHours = quietHours
+        snapshot.rules.revision += 1
+        persist()
+        let rulesToUpload = snapshot.rules
+        Task { await uploadRulesIfPossible(rulesToUpload) }
+    }
+
     func setDailyUsageThresholdSeconds(_ seconds: Int?) {
         snapshot.rules.dailyUsageThresholdSeconds = seconds
         snapshot.rules.revision += 1
@@ -663,11 +674,29 @@ final class AppModel: ObservableObject {
             RunLoop.main.add(timer, forMode: .common)
         }
         let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.syncNow() }
+            Task { @MainActor in
+                self?.restartIntoInstalledBuildIfNeeded()
+                await self?.syncNow()
+            }
         }
         syncTimer = timer
         RunLoop.main.add(timer, forMode: .common)
         Task { await syncNow() }
+    }
+
+    /// After an update launchd may have restarted the old binary before the new bundle landed.
+    /// Quitting lets launchd start the new one; a break in progress finishes first.
+    private func restartIntoInstalledBuildIfNeeded() {
+        autoRecoveryState = readAutoRecoveryState()
+        guard autoRecoveryState == .active,
+              isManagedByLaunchAgent(),
+              !isBreakActive,
+              shouldRestartIntoInstalledBuild(
+                running: Bundle.main.infoDictionary?["CFBundleVersion"] as? String,
+                installed: installedBuildNumber()
+              ) else { return }
+        persist()
+        exit(0)
     }
 
     private func updatePomodoroRefreshHeartbeat(for phase: PomodoroBreakPhase) {
@@ -699,8 +728,9 @@ final class AppModel: ObservableObject {
         let activity = classifier.classify(observation, overrides: snapshot.rules.overrides)
         currentActivity = activity
         let isIdle = activity.category == .idle
+        let plan = SupervisionPlan(rules: snapshot.rules, at: now)
         let breakWasActive = pomodoroBreakCoordinator?.isActiveBreak == true
-        advancePomodoro(isIdle: isIdle, elapsedSeconds: delta, at: now)
+        advancePomodoro(mode: plan.pomodoroMode, isIdle: isIdle, elapsedSeconds: delta, at: now)
         let breakIsActive = pomodoroBreakCoordinator?.isActiveBreak == true
         if !breakWasActive && breakIsActive {
             warningMessage = nil
@@ -717,7 +747,12 @@ final class AppModel: ObservableObject {
         if let action = remoteLockGuard.advance(blocked: blockedByLock, at: now) {
             applyRemoteLock(action, now: now)
         }
-        let rulesStandAside = breakIsActive || blockedByLock != nil
+        // School hours end any reminder run at once instead of letting it fade over five minutes.
+        if !plan.followsSchedule, violationMachine.state != nil {
+            violationMachine = ViolationMachine()
+            process(actions: [.reset], now: now)
+        }
+        let rulesStandAside = breakIsActive || blockedByLock != nil || !plan.followsSchedule
         let followedCategory = rulesStandAside ? ActivityCategory.idle : activity.category
         let endingStep = snapshot.endingMachine.advance(
             category: followedCategory,
@@ -727,7 +762,11 @@ final class AppModel: ObservableObject {
         apply(endingStep, activity: activity, now: now)
 
         let previousDayKey = snapshot.dailyUsage.dayKey
-        snapshot.dailyUsage.advance(isIdle: isEffectivelyIdle, elapsedSeconds: delta, at: now)
+        snapshot.dailyUsage.advance(
+            isIdle: isEffectivelyIdle || !plan.countsDailyUsage,
+            elapsedSeconds: delta,
+            at: now
+        )
         if snapshot.dailyUsage.dayKey != previousDayKey {
             snapshot.dailyUsageNudgeShown = false
         }
@@ -764,7 +803,8 @@ final class AppModel: ObservableObject {
             process(actions: actions, now: now)
         }
 
-        if !snapshot.dailyUsageNudgeShown,
+        if plan.countsDailyUsage,
+           !snapshot.dailyUsageNudgeShown,
            let threshold = snapshot.rules.dailyUsageThresholdSeconds,
            snapshot.dailyUsage.activeSeconds >= threshold,
            !breakIsActive {
@@ -776,13 +816,13 @@ final class AppModel: ObservableObject {
             )
         }
 
-        maybeCheckViewingDistance(isIdle: isEffectivelyIdle, now: now)
+        maybeCheckViewingDistance(isIdle: isEffectivelyIdle || !plan.checksViewingDistance, now: now)
         updateActiveEvent()
         snapshot.prune(now: now)
         persist()
     }
 
-    private func advancePomodoro(isIdle: Bool, elapsedSeconds: TimeInterval, at date: Date) {
+    private func advancePomodoro(mode: PomodoroMode, isIdle: Bool, elapsedSeconds: TimeInterval, at date: Date) {
         guard let coordinator = pomodoroBreakCoordinator else { return }
 
         do {
@@ -791,7 +831,6 @@ final class AppModel: ObservableObject {
                 return
             }
 
-            let mode = snapshot.rules.pomodoroMode
             if mode != pomodoroModeAtLastTick {
                 pomodoroTimer = PomodoroTimer()
                 try coordinator.resetCounting()

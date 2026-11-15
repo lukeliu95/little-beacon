@@ -180,6 +180,9 @@ struct ChildDashboardView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("小灯塔只看你在用游戏、视频还是其他，不看屏幕内容，也不记按键。")
             Text(syncText)
+            if model.hasRemoteConfiguration {
+                Text(model.autoRecoveryState.childText)
+            }
         }
         .font(.system(size: 13))
         .foregroundStyle(.secondary)
@@ -378,8 +381,11 @@ struct ChildMenuPanel: View {
                 MenuPanelRow(title: "检查更新…") {
                     updates.checkForUpdates()
                 }
-                MenuPanelRow(title: "退出小灯塔…") {
-                    NSApp.terminate(nil)
+                // A paired child Mac cannot be quit (ADR-0016); only setup keeps the password exit.
+                if model.snapshot.householdID == nil {
+                    MenuPanelRow(title: "退出小灯塔…") {
+                        NSApp.terminate(nil)
+                    }
                 }
             }
         }

@@ -26,11 +26,25 @@ func runsInBackground(role: DeviceRole, isPaired: Bool) -> Bool {
     role == .child && isPaired
 }
 
+/// What an ordinary quit (menu, Cmd-Q, Activity Monitor's "Quit") does on this Mac.
+enum OrdinaryQuitPolicy: Equatable {
+    case allow
+    /// An unpaired child Mac is still being set up, so the parent may close it with their password.
+    case requireParent
+    /// A paired child Mac has no way out; anything that kills it is restarted by the LaunchAgent.
+    case refuse
+}
+
+func ordinaryQuitPolicy(role: DeviceRole, isPaired: Bool) -> OrdinaryQuitPolicy {
+    guard role == .child else { return .allow }
+    return isPaired ? .refuse : .requireParent
+}
+
 @MainActor
 final class ApplicationTerminationGate {
     static let shared = ApplicationTerminationGate()
     private(set) var blocksTermination = false
-    private var requiresParentApproval = false
+    private var quitPolicy: OrdinaryQuitPolicy = .allow
     private var updateIsRelaunching = false
     private var postponedUpdateInstallers: [() -> Void] = []
 
@@ -44,8 +58,8 @@ final class ApplicationTerminationGate {
         installers.forEach { $0() }
     }
 
-    func setRequiresParentApproval(_ isRequired: Bool) {
-        requiresParentApproval = isRequired
+    func setQuitPolicy(_ policy: OrdinaryQuitPolicy) {
+        quitPolicy = policy
     }
 
     /// Sparkle quits through the same path as everyone else; a signed update must not need a parent.
@@ -62,8 +76,12 @@ final class ApplicationTerminationGate {
     func decision(systemSessionIsEnding: Bool) -> TerminationDecision {
         if systemSessionIsEnding { return .allow }
         if blocksTermination { return .reject }
-        if updateIsRelaunching || !requiresParentApproval { return .allow }
-        return .requireParent
+        if updateIsRelaunching { return .allow }
+        switch quitPolicy {
+        case .allow: return .allow
+        case .requireParent: return .requireParent
+        case .refuse: return .reject
+        }
     }
 }
 
@@ -74,7 +92,7 @@ final class ApplicationPresenceController {
 
     func apply(role: DeviceRole, isPaired: Bool) {
         NSApplication.shared.setActivationPolicy(runsInBackground(role: role, isPaired: isPaired) ? .accessory : .regular)
-        ApplicationTerminationGate.shared.setRequiresParentApproval(role == .child)
+        ApplicationTerminationGate.shared.setQuitPolicy(ordinaryQuitPolicy(role: role, isPaired: isPaired))
 
         guard role == .child else {
             if let activityToken { ProcessInfo.processInfo.endActivity(activityToken) }
