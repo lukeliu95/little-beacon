@@ -33,6 +33,25 @@
 
 ## 上线顺序
 
-1. 部署后端（按 `backend-deploy` 记忆的流程，无表结构改动）。
+1. 部署后端（按 `backend-deploy` 记忆的流程，无表结构改动）。已完成，见下节。
 2. 发客户端新版本。
 3. 孩子 Mac 上重新运行 `scripts/install-auto-recovery.sh`，孩子端窗口底部显示“自动恢复已开启”。
+
+## 后端部署记录
+
+- 时间：2026-11-15 22:14（日本时间）
+- 来源：`main` `6e189d4`（PR #16 合并后），`git archive` 干净导出
+- 新部署：`little-beacon-a7uayj5u6`，已指向 `little-beacon-api.vercel.app`
+- 回滚点：`little-beacon-k64bk6atz`（上一个线上部署）
+- 表结构：无改动
+
+| 检查 | 结果 |
+| --- | --- |
+| `/api/health` | 200，数据库可连 |
+| 其余接口无凭据请求 | 401 或 405，没有 404，路由都在 |
+| 真实孩子端同步 `/api/sync/child` | 200 |
+| 真实家长端同步 `/api/sync/parent` | 200 |
+| 孩子端上报状态 `PUT /api/status` | 200 |
+| 错误日志 | 无 |
+
+还没做的：发客户端新版本，孩子 Mac 上重新运行安装脚本。
