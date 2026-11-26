@@ -84,6 +84,12 @@ final class AppModel: ObservableObject {
     private var pomodoroModeAtLastTick: PomodoroMode = .gentle
     private var monitorTimer: Timer?
     private var syncTimer: Timer?
+    private var syncPacer = SyncPacer()
+    private var windowObservers: [NSObjectProtocol] = []
+    /// Set by the parent's menu-bar panel while it is open; the main window is checked directly.
+    var isParentPanelOpen = false {
+        didSet { if isParentPanelOpen && !oldValue { syncIfDue() } }
+    }
     private var pomodoroRefreshTimer: Timer?
     private var activeEventID: UUID?
     private var lastTick = Date()
@@ -144,7 +150,9 @@ final class AppModel: ObservableObject {
     var pendingRequests: [TemporaryRequest] { requests.filter { $0.status == .pending } }
     var currentStatus: DeviceStatus {
         var status = snapshot.currentStatus
-        if Date().timeIntervalSince(status.lastSeenAt) > 90 { status.isOnline = false }
+        if Date().timeIntervalSince(status.lastSeenAt) > SyncPace.onlineGrace(for: status.category) {
+            status.isOnline = false
+        }
         return status
     }
     var hasRemoteConfiguration: Bool {
@@ -253,7 +261,59 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Runs a sync only when this tick is due one; see `SyncPace`.
+    func syncIfDue(at now: Date = Date()) {
+        guard snapshot.role != .unconfigured else { return }
+        let busy = isSomebodyThere
+        guard syncPacer.shouldSync(
+            busy: busy,
+            idleInterval: SyncPace.idleInterval(for: snapshot.role),
+            at: now
+        ) else { return }
+        Task { await syncNow() }
+    }
+
+    /// A parent bringing the window into view gets fresh data at once.
+    private func observeParentWindows() {
+        windowObservers.forEach(NotificationCenter.default.removeObserver)
+        windowObservers = []
+        guard snapshot.role == .parent else { return }
+        let names: [Notification.Name] = [
+            NSWindow.didChangeOcclusionStateNotification,
+            NSApplication.didBecomeActiveNotification,
+        ]
+        windowObservers = names.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.syncIfDue() }
+            }
+        }
+    }
+
+    /// A child at the Mac, or a parent looking at the window. Work still on its way (a remote close,
+    /// a break, a child's request) keeps the fast beat so it is not left waiting. Queued events need
+    /// no rule of their own: they arise while the child is busy, and leaving syncs once at once.
+    private var isSomebodyThere: Bool {
+        switch snapshot.role {
+        case .child:
+            return currentActivity.category != .idle
+                || isBreakActive
+                || !snapshot.remoteControl.active.isEmpty
+                || snapshot.requests.contains { $0.status == .pending }
+        case .parent:
+            let windowInSight = CGDisplayIsAsleep(CGMainDisplayID()) == 0 && NSApp.windows.contains {
+                $0.canBecomeMain && $0.isVisible && !$0.isMiniaturized && $0.occlusionState.contains(.visible)
+            }
+            let commandUnderway = snapshot.remoteCommands.contains {
+                $0.status == .pending || $0.status == .received
+            }
+            return windowInSight || isParentPanelOpen || commandUnderway
+        case .unconfigured:
+            return false
+        }
+    }
+
     func syncNow() async {
+        syncPacer.recordSync(at: Date())
         guard hasRemoteConfiguration else {
             connectionMessage = "本地模式（尚未连接服务器）"
             return
@@ -728,11 +788,12 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 self?.restartIntoInstalledBuildIfNeeded()
                 self?.handOverToAutoRecoveryIfNeeded()
-                await self?.syncNow()
+                self?.syncIfDue()
             }
         }
         syncTimer = timer
         RunLoop.main.add(timer, forMode: .common)
+        observeParentWindows()
         Task { await syncNow() }
     }
 
@@ -786,6 +847,7 @@ final class AppModel: ObservableObject {
         lastTick = now
         let observation = activityMonitor.observeFrontmostActivity()
         let activity = classifier.classify(observation, overrides: snapshot.rules.overrides)
+        let wasIdle = currentActivity.category == .idle
         currentActivity = activity
         let isIdle = activity.category == .idle
         let plan = SupervisionPlan(rules: snapshot.rules, at: now)
@@ -837,6 +899,8 @@ final class AppModel: ObservableObject {
             isOnline: true,
             dailyUsageSeconds: snapshot.dailyUsage.activeSeconds
         )
+        // Arriving or leaving syncs at once instead of waiting for the next 30-second tick.
+        if wasIdle != isIdle { syncIfDue(at: now) }
 
         if rulesStandAside {
             let actions = violationMachine.advance(

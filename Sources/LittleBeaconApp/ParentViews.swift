@@ -1819,6 +1819,8 @@ struct ParentMenuPanel: View {
         }
         .padding(14)
         .frame(width: 320)
+        .onAppear { model.isParentPanelOpen = true }
+        .onDisappear { model.isParentPanelOpen = false }
     }
 
     private func requestCard(_ request: TemporaryRequest, now: Date) -> some View {

@@ -69,6 +69,8 @@ final class ActivityMonitor {
     private let closer = ApplicationCloser()
 
     func observeFrontmostActivity() -> ActivityObservation {
+        // Nobody can be using a Mac whose screen is off; this also lets the sync slow down.
+        if CGDisplayIsAsleep(CGMainDisplayID()) != 0 { return .idle }
         guard let app = NSWorkspace.shared.frontmostApplication else { return .idle }
         let bundleID = app.bundleIdentifier
         if let bundleID, inactiveSessionBundleIDs.contains(bundleID) {
