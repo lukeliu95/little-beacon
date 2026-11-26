@@ -366,13 +366,22 @@ struct DayRail: View {
     let outlook: DayOutlook
 
     private var axis: DayAxis {
-        DayAxis(spans: outlook.game.spans + outlook.video.spans + (outlook.quiet.map { [$0] } ?? []))
+        DayAxis(spans: outlook.game.spans + outlook.video.spans + (outlook.quiet.map { [$0] } ?? []) + outlook.study)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let quiet = outlook.quiet {
-                schoolLane(quiet)
+                greyLane(name: "上学", spans: [quiet], description: "上学时段 \(clockText(quiet.startMinute)) 到 \(clockText(quiet.endMinute))，只提醒休息眼睛")
+            }
+            if !outlook.study.isEmpty {
+                greyLane(
+                    name: "学习",
+                    spans: outlook.study,
+                    description: "学习时段 " + outlook.study
+                        .map { "\(clockText($0.startMinute)) 到 \(clockText($0.endMinute))" }
+                        .joined(separator: "，") + "，小灯塔保持安静"
+                )
             }
             lane(outlook.game)
             lane(outlook.video)
@@ -413,19 +422,21 @@ struct DayRail: View {
     }
 
     /// Grey, not lamp-coloured: the lamp only ever means "this time is open".
-    private func schoolLane(_ span: DaySpan) -> some View {
+    private func greyLane(name: String, spans: [DaySpan], description: String) -> some View {
         HStack(spacing: 12) {
-            Text("上学")
+            Text(name)
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .leading)
             GeometryReader { proxy in
                 ZStack(alignment: .topLeading) {
                     RoundedRectangle(cornerRadius: 6).fill(BeaconStyle.trackFill)
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.primary.opacity(0.22))
-                        .frame(width: proxy.size.width * (axis.fraction(span.endMinute) - axis.fraction(span.startMinute)))
-                        .offset(x: proxy.size.width * axis.fraction(span.startMinute))
+                    ForEach(spans, id: \.startMinute) { span in
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.primary.opacity(0.22))
+                            .frame(width: proxy.size.width * (axis.fraction(span.endMinute) - axis.fraction(span.startMinute)))
+                            .offset(x: proxy.size.width * axis.fraction(span.startMinute))
+                    }
                 }
                 .overlay(alignment: .topLeading) {
                     Rectangle()
@@ -436,7 +447,7 @@ struct DayRail: View {
             }
             .frame(height: 26)
             .accessibilityElement()
-            .accessibilityLabel("上学时段 \(clockText(span.startMinute)) 到 \(clockText(span.endMinute))，只提醒休息眼睛")
+            .accessibilityLabel(description)
         }
     }
 
@@ -589,6 +600,7 @@ private struct RulesView: View {
             switch tab {
             case .schedule:
                 SchoolHoursSection(model: model)
+                StudySessionsSection(model: model)
                 WeekScheduleView(model: model)
             case .care: CareRulesView(model: model)
             case .apps: AppRulesView(model: model)
@@ -1160,6 +1172,126 @@ private struct SchoolHoursSection: View {
     }
 }
 
+/// One-off study stretches (issue #19). The parent adds them, the child Mac stays fully quiet.
+private struct StudySessionsSection: View {
+    @ObservedObject var model: AppModel
+    @State private var isCustomizing = false
+    @State private var customStart = Date()
+    @State private var customEnd = Date().addingTimeInterval(2 * 3_600)
+    @State private var problem: String?
+
+    var body: some View {
+        let now = Date()
+        let sessions = model.rules.upcomingStudySessions(at: now)
+        VStack(alignment: .leading, spacing: 12) {
+            SettingRow(
+                title: "学习时段",
+                detail: "孩子认真学习时，小灯塔完全安静：不提醒休息，不管游戏和视频，也不通知你"
+            ) {
+                HStack(spacing: 6) {
+                    Text("从现在起").font(.system(size: 14)).foregroundStyle(.secondary)
+                    ForEach([1, 2, 3], id: \.self) { hours in
+                        Button("\(hours) 小时") { addFromNow(hours: hours) }
+                            .buttonStyle(BeaconButtonStyle())
+                    }
+                    Button("自定义") { startCustomizing() }
+                        .buttonStyle(BeaconButtonStyle(kind: isCustomizing ? .selected : .quiet))
+                }
+                .fixedSize()
+            }
+            if isCustomizing {
+                HStack(spacing: 10) {
+                    DatePicker("开始", selection: $customStart, displayedComponents: [.date, .hourAndMinute])
+                        .labelsHidden()
+                    Text("到").font(.system(size: 14)).foregroundStyle(.secondary)
+                    DatePicker("结束", selection: $customEnd, displayedComponents: .hourAndMinute)
+                        .labelsHidden()
+                    Button("添加") { addCustom() }
+                        .buttonStyle(BeaconButtonStyle(kind: .primary))
+                    Button("取消") { isCustomizing = false; problem = nil }
+                        .buttonStyle(BeaconButtonStyle())
+                    Spacer()
+                }
+            }
+            if let problem {
+                Text(problem).font(.system(size: 13)).foregroundStyle(.secondary)
+            }
+            ForEach(sessions) { session in
+                HStack(spacing: 12) {
+                    Text(studySessionText(session, now: now)).font(.system(size: 14).monospacedDigit())
+                    if session.startsAt <= now {
+                        Text("进行中").font(.system(size: 13, weight: .semibold))
+                    }
+                    Spacer()
+                    Button(session.startsAt <= now ? "提前结束" : "删除") {
+                        model.endStudySession(id: session.id)
+                    }
+                    .buttonStyle(BeaconButtonStyle())
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(BeaconStyle.groupFill, in: RoundedRectangle(cornerRadius: 10))
+            }
+            Rectangle().fill(BeaconStyle.hairline).frame(height: 1)
+        }
+    }
+
+    private func addFromNow(hours: Int) {
+        let now = Date()
+        report(model.addStudySession(startsAt: now, endsAt: now.addingTimeInterval(TimeInterval(hours * 3_600))))
+    }
+
+    private func startCustomizing() {
+        let calendar = Calendar.current
+        let nextHour = calendar.nextDate(
+            after: Date(), matching: DateComponents(minute: 0), matchingPolicy: .nextTime
+        ) ?? Date()
+        customStart = nextHour
+        customEnd = nextHour.addingTimeInterval(2 * 3_600)
+        problem = nil
+        isCustomizing = true
+    }
+
+    /// The end picker only shows a time: it lands on the start's day, or the next day if earlier.
+    private func addCustom() {
+        let calendar = Calendar.current
+        var end = calendar.date(
+            bySettingHour: calendar.component(.hour, from: customEnd),
+            minute: calendar.component(.minute, from: customEnd),
+            second: 0,
+            of: customStart
+        ) ?? customEnd
+        if end <= customStart {
+            end = calendar.date(byAdding: .day, value: 1, to: end) ?? end
+        }
+        if report(model.addStudySession(startsAt: customStart, endsAt: end)) {
+            isCustomizing = false
+        }
+    }
+
+    @discardableResult
+    private func report(_ added: Bool) -> Bool {
+        problem = added ? nil : "没有添加：一段最长 12 小时，结束时间要晚于现在，最多保留 \(StudySession.maximumCount) 段"
+        return added
+    }
+}
+
+func studySessionText(_ session: StudySession, now: Date) -> String {
+    let calendar = Calendar.current
+    let time = Date.FormatStyle(date: .omitted, time: .shortened)
+    let day: String
+    if calendar.isDate(session.startsAt, inSameDayAs: now) {
+        day = "今天"
+    } else if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
+              calendar.isDate(session.startsAt, inSameDayAs: tomorrow) {
+        day = "明天"
+    } else {
+        day = session.startsAt.formatted(.dateTime.month().day())
+    }
+    let ends = calendar.isDate(session.endsAt, inSameDayAs: session.startsAt) ? "" : "次日 "
+    return "\(day) \(session.startsAt.formatted(time))–\(ends)\(session.endsAt.formatted(time))"
+}
+
 private struct SettingRow<Trailing: View>: View {
     let title: String
     let detail: String
@@ -1429,6 +1561,8 @@ private struct DevicesView: View {
             PageTitle(text: "设备")
             if model.hasRemoteConfiguration {
                 childDevice
+                hairline
+                ExitPasswordSection(model: model)
             } else {
                 firstConnection
             }
@@ -1550,6 +1684,80 @@ private struct DevicesView: View {
             }
         }
         .animation(.easeOut(duration: 0.18), value: showsAdvanced)
+    }
+}
+
+/// The password the child types to close the child app (issue #19). Only its digest is kept.
+private struct ExitPasswordSection: View {
+    @ObservedObject var model: AppModel
+    @State private var isEditing = false
+    @State private var first = ""
+    @State private var second = ""
+    @State private var problem: String?
+
+    private var isSet: Bool { model.rules.childExitPassword != nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SettingRow(
+                title: "退出密码",
+                detail: isSet
+                    ? "已设置。孩子输对后小灯塔退出，下次登录时自动启动"
+                    : "还没有设置，孩子端不能退出。这是小灯塔自己的密码，不是电脑的密码"
+            ) {
+                HStack(spacing: 8) {
+                    if isSet {
+                        Button("清除") { model.setChildExitPassword(nil) }
+                            .buttonStyle(BeaconButtonStyle(kind: .destructive))
+                    }
+                    Button(isSet ? "修改" : "设置") { startEditing() }
+                        .buttonStyle(BeaconButtonStyle(kind: isEditing ? .selected : .quiet))
+                }
+            }
+            if isEditing {
+                HStack(spacing: 10) {
+                    SecureField("新密码，至少 \(ExitPassword.minimumLength) 位", text: $first)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+                    SecureField("再输一次", text: $second)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+                        .onSubmit(save)
+                    Button("保存", action: save)
+                        .buttonStyle(BeaconButtonStyle(kind: .primary))
+                        .disabled(first.isEmpty || second.isEmpty)
+                    Button("取消") { isEditing = false }
+                        .buttonStyle(BeaconButtonStyle())
+                    Spacer()
+                }
+                if let problem {
+                    Text(problem).font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func startEditing() {
+        first = ""
+        second = ""
+        problem = nil
+        isEditing = true
+    }
+
+    private func save() {
+        guard first.count >= ExitPassword.minimumLength else {
+            problem = "密码至少要 \(ExitPassword.minimumLength) 位，建议 6 位以上"
+            return
+        }
+        guard first == second else {
+            problem = "两次输入的不一样"
+            return
+        }
+        if model.setChildExitPassword(first) {
+            isEditing = false
+            first = ""
+            second = ""
+        }
     }
 }
 

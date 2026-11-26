@@ -111,6 +111,10 @@ public struct RuleSet: Codable, Equatable, Sendable {
     public var defaultReminderStrategy: ReminderStrategy
     /// School hours in which only the gentle eye-care reminder runs. Off by default.
     public var schoolQuietHours: QuietHours
+    /// Study sessions in which the child Mac stays completely quiet.
+    public var studySessions: [StudySession]
+    /// What the child must type to close the child app. `nil` means the child cannot quit.
+    public var childExitPassword: ExitPassword?
 
     public init(
         revision: Int = 1,
@@ -121,7 +125,9 @@ public struct RuleSet: Codable, Equatable, Sendable {
         dailyUsageThresholdSeconds: Int? = 7200,
         viewingDistancePolicy: ViewingDistancePolicy = .disabled,
         defaultReminderStrategy: ReminderStrategy = .standard,
-        schoolQuietHours: QuietHours = .schoolDefault
+        schoolQuietHours: QuietHours = .schoolDefault,
+        studySessions: [StudySession] = [],
+        childExitPassword: ExitPassword? = nil
     ) {
         self.revision = revision
         self.timeZoneIdentifier = timeZoneIdentifier
@@ -132,12 +138,14 @@ public struct RuleSet: Codable, Equatable, Sendable {
         self.viewingDistancePolicy = viewingDistancePolicy
         self.defaultReminderStrategy = defaultReminderStrategy
         self.schoolQuietHours = schoolQuietHours
+        self.studySessions = studySessions
+        self.childExitPassword = childExitPassword
     }
 
     private enum CodingKeys: String, CodingKey {
         case revision, timeZoneIdentifier, activityRules, overrides
         case pomodoroMode, pomodoroEnabled, dailyUsageThresholdSeconds, viewingDistancePolicy
-        case defaultReminderStrategy, schoolQuietHours
+        case defaultReminderStrategy, schoolQuietHours, studySessions, childExitPassword
     }
 
     // Custom decoding keeps old saved/remote documents (missing the two newest keys) loadable
@@ -161,6 +169,8 @@ public struct RuleSet: Codable, Equatable, Sendable {
             forKey: .defaultReminderStrategy
         ) ?? .standard
         schoolQuietHours = try container.decodeIfPresent(QuietHours.self, forKey: .schoolQuietHours) ?? .schoolDefault
+        studySessions = try container.decodeIfPresent([StudySession].self, forKey: .studySessions) ?? []
+        childExitPassword = try container.decodeIfPresent(ExitPassword.self, forKey: .childExitPassword)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -175,6 +185,14 @@ public struct RuleSet: Codable, Equatable, Sendable {
         try container.encode(viewingDistancePolicy, forKey: .viewingDistancePolicy)
         try container.encode(defaultReminderStrategy, forKey: .defaultReminderStrategy)
         try container.encode(schoolQuietHours, forKey: .schoolQuietHours)
+        try container.encode(studySessions, forKey: .studySessions)
+        // An explicit null tells the server the parent cleared it, rather than an old client
+        // leaving it out (the server keeps keys that are missing, not keys that are null).
+        if let childExitPassword {
+            try container.encode(childExitPassword, forKey: .childExitPassword)
+        } else {
+            try container.encodeNil(forKey: .childExitPassword)
+        }
     }
 
     public static var starter: RuleSet {

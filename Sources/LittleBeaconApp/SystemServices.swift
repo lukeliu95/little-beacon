@@ -56,9 +56,29 @@ final class BreakAlarmController: BreakAlarmPlaying {
             && Bundle.module.url(forResource: "pomodoro-complete", withExtension: "wav") != nil
     }
 
-    private let attentionPlayer = BreakAlarmController.makePlayer(named: "pomodoro-alarm")
-    private let completionPlayer = BreakAlarmController.makePlayer(named: "pomodoro-complete")
+    private var attentionPlayer: AVAudioPlayer?
+    private var completionPlayer: AVAudioPlayer?
+    private var playersAreLoaded = false
     private var repeatTimer: Timer?
+
+    init() {
+        // Opening the sound system can stall for about a minute right after launchd starts the
+        // app. Loading the players here, during AppModel.init, froze the whole app before its menu
+        // bar icon appeared, so they load in the background and a beep covers the gap (issue #19).
+        Task.detached(priority: .utility) { [weak self] in
+            let players = LoadedPlayers(
+                attention: Self.makePlayer(named: "pomodoro-alarm"),
+                completion: Self.makePlayer(named: "pomodoro-complete")
+            )
+            await self?.receive(players)
+        }
+    }
+
+    private func receive(_ players: LoadedPlayers) {
+        attentionPlayer = players.attention
+        completionPlayer = players.completion
+        playersAreLoaded = true
+    }
 
     func startWaitingAlarm() {
         stopWaitingAlarm()
@@ -88,7 +108,8 @@ final class BreakAlarmController: BreakAlarmPlaying {
     private func play(_ player: AVAudioPlayer?, named name: String) {
         guard let player else {
             NSSound.beep()
-            onPlaybackError?(BreakAlarmError.resourceUnavailable(name))
+            // Still loading is not a fault; a missing resource after loading is.
+            if playersAreLoaded { onPlaybackError?(BreakAlarmError.resourceUnavailable(name)) }
             return
         }
         player.stop()
@@ -99,7 +120,7 @@ final class BreakAlarmController: BreakAlarmPlaying {
         }
     }
 
-    private static func makePlayer(named name: String) -> AVAudioPlayer? {
+    private nonisolated static func makePlayer(named name: String) -> AVAudioPlayer? {
         guard let url = Bundle.module.url(forResource: name, withExtension: "wav"),
               let player = try? AVAudioPlayer(contentsOf: url) else {
             return nil
@@ -146,4 +167,10 @@ enum AutoStartManager {
             return "自动启动需要在系统设置中确认：\(error.localizedDescription)"
         }
     }
+}
+
+/// Carries the players from the loading task to the main actor; nothing touches them in between.
+private struct LoadedPlayers: @unchecked Sendable {
+    let attention: AVAudioPlayer?
+    let completion: AVAudioPlayer?
 }

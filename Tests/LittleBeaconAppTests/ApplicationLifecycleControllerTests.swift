@@ -7,7 +7,7 @@ import Testing
 private struct StubParentAuthorizer: ParentAuthorizing {
     let isApproved: Bool
 
-    func authorizeQuit() async -> Bool {
+    func authorizeQuit(with credential: QuitCredential) async -> Bool {
         isApproved
     }
 }
@@ -29,15 +29,21 @@ private func makeController(
     gate: ApplicationTerminationGate,
     isApproved: Bool = false,
     quitReason: OSType? = nil,
-    replies: TerminationReplies? = nil
+    replies: TerminationReplies? = nil,
+    explainRefusal: @escaping () -> Void = {},
+    stopAutoRecovery: @escaping () -> Void = {}
 ) -> ApplicationLifecycleController {
     ApplicationLifecycleController(
         gate: gate,
         parentAuthorizer: StubParentAuthorizer(isApproved: isApproved),
         quitReason: { quitReason },
-        replyToTermination: { replies?.values.append($0) }
+        replyToTermination: { replies?.values.append($0) },
+        explainRefusal: explainRefusal,
+        stopAutoRecovery: stopAutoRecovery
     )
 }
+
+private let sampleExitPassword = ExitPassword.make(from: "1234", iterations: 1_000)!
 
 @Test @MainActor func activeBreakRejectsNormalApplicationTermination() {
     let controller = ApplicationLifecycleController()
@@ -66,7 +72,7 @@ private func makeController(
 
 @Test @MainActor func childQuitWaitsForParentAndContinuesWhenApproved() async {
     let gate = ApplicationTerminationGate()
-    gate.setQuitPolicy(.requireParent)
+    gate.setQuitPolicy(.requireParent(.administrator))
     let replies = TerminationReplies()
     let controller = makeController(gate: gate, isApproved: true, replies: replies)
 
@@ -76,7 +82,7 @@ private func makeController(
 
 @Test @MainActor func childQuitStaysRunningWhenParentDeclines() async {
     let gate = ApplicationTerminationGate()
-    gate.setQuitPolicy(.requireParent)
+    gate.setQuitPolicy(.requireParent(.administrator))
     let replies = TerminationReplies()
     let controller = makeController(gate: gate, isApproved: false, replies: replies)
 
@@ -86,7 +92,7 @@ private func makeController(
 
 @Test @MainActor func secondChildQuitDoesNotOpenAnotherPasswordDialog() async {
     let gate = ApplicationTerminationGate()
-    gate.setQuitPolicy(.requireParent)
+    gate.setQuitPolicy(.requireParent(.administrator))
     let replies = TerminationReplies()
     let controller = makeController(gate: gate, isApproved: false, replies: replies)
 
@@ -99,7 +105,7 @@ private func makeController(
 
 @Test @MainActor func approvedQuitIsRefusedIfABreakStartedDuringThePrompt() async {
     let gate = ApplicationTerminationGate()
-    gate.setQuitPolicy(.requireParent)
+    gate.setQuitPolicy(.requireParent(.administrator))
     let replies = TerminationReplies()
     let controller = makeController(gate: gate, isApproved: true, replies: replies)
 
@@ -110,7 +116,7 @@ private func makeController(
 
 @Test @MainActor func activeBreakStillRefusesAQuitBeforeAskingForThePassword() {
     let gate = ApplicationTerminationGate()
-    gate.setQuitPolicy(.requireParent)
+    gate.setQuitPolicy(.requireParent(.administrator))
     gate.setBreakActive(true)
 
     #expect(makeController(gate: gate, isApproved: true).applicationShouldTerminate(.shared) == .terminateCancel)
@@ -118,7 +124,7 @@ private func makeController(
 
 @Test @MainActor func systemShutdownIsNeverHeldUp() {
     let gate = ApplicationTerminationGate()
-    gate.setQuitPolicy(.requireParent)
+    gate.setQuitPolicy(.requireParent(.administrator))
     let controller = makeController(gate: gate, quitReason: OSType(kAEShutDown))
 
     #expect(controller.applicationShouldTerminate(.shared) == .terminateNow)
@@ -136,7 +142,7 @@ private func makeController(
 
 @Test @MainActor func updateRelaunchDoesNotNeedTheParent() {
     let gate = ApplicationTerminationGate()
-    gate.setQuitPolicy(.requireParent)
+    gate.setQuitPolicy(.requireParent(.administrator))
     gate.allowUpdateRelaunch()
 
     #expect(makeController(gate: gate).applicationShouldTerminate(.shared) == .terminateNow)
@@ -155,11 +161,54 @@ private func makeController(
     #expect(!runsInBackground(role: .unconfigured, isPaired: false))
 }
 
-@Test @MainActor func pairedChildRefusesOrdinaryQuitWithoutAskingForAPassword() {
+@Test @MainActor func pairedChildWithoutAnExitPasswordExplainsAndKeepsRunning() {
     let gate = ApplicationTerminationGate()
     gate.setQuitPolicy(.refuse)
+    var explained = 0
 
-    #expect(makeController(gate: gate, isApproved: true).applicationShouldTerminate(.shared) == .terminateCancel)
+    let controller = makeController(gate: gate, isApproved: true, explainRefusal: { explained += 1 })
+    #expect(controller.applicationShouldTerminate(.shared) == .terminateCancel)
+    #expect(explained == 1)
+}
+
+@Test @MainActor func correctExitPasswordQuitsAndStopsTheRestart() async {
+    let gate = ApplicationTerminationGate()
+    gate.setQuitPolicy(.requireParent(.exitPassword(sampleExitPassword)))
+    var saved = 0
+    var stopped = 0
+    gate.persistBeforeApprovedQuit = { saved += 1 }
+    let replies = TerminationReplies()
+    let controller = makeController(gate: gate, isApproved: true, replies: replies, stopAutoRecovery: { stopped += 1 })
+
+    #expect(controller.applicationShouldTerminate(.shared) == .terminateLater)
+    #expect(await replies.next())
+    #expect(saved == 1)
+    #expect(stopped == 1)
+}
+
+@Test @MainActor func wrongExitPasswordKeepsTheAppAndTheRestart() async {
+    let gate = ApplicationTerminationGate()
+    gate.setQuitPolicy(.requireParent(.exitPassword(sampleExitPassword)))
+    var stopped = 0
+    let replies = TerminationReplies()
+    let controller = makeController(gate: gate, isApproved: false, replies: replies, stopAutoRecovery: { stopped += 1 })
+
+    #expect(controller.applicationShouldTerminate(.shared) == .terminateLater)
+    #expect(await replies.next() == false)
+    #expect(stopped == 0)
+}
+
+@Test @MainActor func aBreakStartedDuringThePasswordPromptKeepsTheRestart() async {
+    let gate = ApplicationTerminationGate()
+    gate.setQuitPolicy(.requireParent(.exitPassword(sampleExitPassword)))
+    var stopped = 0
+    let replies = TerminationReplies()
+    let controller = makeController(gate: gate, isApproved: true, replies: replies, stopAutoRecovery: { stopped += 1 })
+
+    #expect(controller.applicationShouldTerminate(.shared) == .terminateLater)
+    gate.setBreakActive(true)
+    #expect(await replies.next() == false)
+    #expect(stopped == 0)
 }
 
 @Test @MainActor func pairedChildStillLetsShutdownAndUpdatesThrough() {
@@ -171,9 +220,13 @@ private func makeController(
     #expect(makeController(gate: gate).applicationShouldTerminate(.shared) == .terminateNow)
 }
 
-@Test func onlyAPairedChildMacRefusesToQuit() {
+@Test func quitPolicyFollowsPairingAndTheParentsExitPassword() {
     #expect(ordinaryQuitPolicy(role: .child, isPaired: true) == .refuse)
-    #expect(ordinaryQuitPolicy(role: .child, isPaired: false) == .requireParent)
-    #expect(ordinaryQuitPolicy(role: .parent, isPaired: true) == .allow)
+    #expect(ordinaryQuitPolicy(role: .child, isPaired: true, exitPassword: sampleExitPassword)
+        == .requireParent(.exitPassword(sampleExitPassword)))
+    #expect(ordinaryQuitPolicy(role: .child, isPaired: false) == .requireParent(.administrator))
+    #expect(ordinaryQuitPolicy(role: .child, isPaired: false, exitPassword: sampleExitPassword)
+        == .requireParent(.administrator))
+    #expect(ordinaryQuitPolicy(role: .parent, isPaired: true, exitPassword: sampleExitPassword) == .allow)
     #expect(ordinaryQuitPolicy(role: .unconfigured, isPaired: false) == .allow)
 }

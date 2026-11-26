@@ -286,3 +286,41 @@ test("older rule uploads preserve school hours they do not understand", () => {
   const merged = mergeMissingRuleSettings(incoming, current);
   assert.deepEqual(merged.schoolQuietHours, current.schoolQuietHours);
 });
+
+test("study sessions and the exit password are off by default and must be well formed", () => {
+  const rules = defaultRules();
+  assert.deepEqual(rules.studySessions, []);
+  assert.equal(rules.childExitPassword, null);
+  assert.equal(validateRuleSet(rules), true);
+
+  const session = { id: "a", startsAt: "2026-11-26T10:00:00Z", endsAt: "2026-11-26T12:00:00Z" };
+  assert.equal(validateRuleSet({ ...rules, studySessions: [session] }), true);
+  assert.equal(validateRuleSet({ ...rules, studySessions: [{ ...session, endsAt: "2026-11-26T09:00:00Z" }] }), false);
+  assert.equal(validateRuleSet({ ...rules, studySessions: [{ ...session, endsAt: "2026-11-27T10:00:00Z" }] }), false);
+  assert.equal(validateRuleSet({ ...rules, studySessions: [{ ...session, startsAt: "soon" }] }), false);
+  assert.equal(validateRuleSet({ ...rules, studySessions: Array(21).fill(session) }), false);
+  assert.equal(validateRuleSet({ ...rules, studySessions: "always" }), false);
+
+  const password = { salt: "c2FsdA==", digest: "ZGlnZXN0", iterations: 200_000 };
+  assert.equal(validateRuleSet({ ...rules, childExitPassword: password }), true);
+  assert.equal(validateRuleSet({ ...rules, childExitPassword: { ...password, iterations: 10 } }), false);
+  assert.equal(validateRuleSet({ ...rules, childExitPassword: { ...password, digest: "" } }), false);
+  assert.equal(validateRuleSet({ ...rules, childExitPassword: "1234" }), false);
+});
+
+test("older uploads keep study sessions and the password, but a cleared password stays cleared", () => {
+  const current = defaultRules() as Record<string, unknown>;
+  current.studySessions = [{ id: "a", startsAt: "2026-11-26T10:00:00Z", endsAt: "2026-11-26T12:00:00Z" }];
+  current.childExitPassword = { salt: "c2FsdA==", digest: "ZGlnZXN0", iterations: 200_000 };
+
+  const older = structuredClone(current);
+  delete older.studySessions;
+  delete older.childExitPassword;
+  older.revision = 2;
+  const kept = mergeMissingRuleSettings(older, current);
+  assert.deepEqual(kept.studySessions, current.studySessions);
+  assert.deepEqual(kept.childExitPassword, current.childExitPassword);
+
+  const cleared = { ...structuredClone(current), childExitPassword: null, revision: 3 };
+  assert.equal(mergeMissingRuleSettings(cleared, current).childExitPassword, null);
+});

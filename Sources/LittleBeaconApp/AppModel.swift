@@ -98,7 +98,8 @@ final class AppModel: ObservableObject {
     init() {
         snapshot = store.load()
         snapshot.remoteControl.resumeAfterRestart()
-        pomodoroModeAtLastTick = snapshot.rules.pomodoroMode(at: Date())
+        pomodoroModeAtLastTick = SupervisionPlan(rules: snapshot.rules, at: Date()).pomodoroMode
+        ApplicationTerminationGate.shared.persistBeforeApprovedQuit = { [weak self] in self?.persist() }
         applyPresence()
         configurePomodoroCoordinator()
         NotificationService.requestAuthorization()
@@ -289,6 +290,7 @@ final class AppModel: ObservableObject {
             case .child:
                 let response = try await client.fetchChildSync()
                 snapshot.rules = snapshot.rules.acceptingRemote(response.rules)
+                applyQuitPolicy()
                 snapshot.temporaryGrants = response.grants
                 snapshot.requests = response.requests
                 snapshot.lastRulesSyncAt = Date()
@@ -523,6 +525,55 @@ final class AppModel: ObservableObject {
         Task { await uploadRulesIfPossible(rulesToUpload) }
     }
 
+    /// `nil` clears the password, which leaves a paired child Mac with no way to quit.
+    @discardableResult
+    func setChildExitPassword(_ password: String?) -> Bool {
+        let hashed: ExitPassword?
+        if let password {
+            guard let made = ExitPassword.make(from: password) else { return false }
+            hashed = made
+        } else {
+            hashed = nil
+        }
+        snapshot.rules.childExitPassword = hashed
+        commitRuleChange()
+        return true
+    }
+
+    @discardableResult
+    func addStudySession(startsAt: Date, endsAt: Date) -> Bool {
+        let now = Date()
+        guard let sessions = studySessions(
+            snapshot.rules.studySessions,
+            adding: StudySession(startsAt: startsAt, endsAt: endsAt),
+            at: now
+        ) else { return false }
+        snapshot.rules.studySessions = sessions
+        commitRuleChange()
+        return true
+    }
+
+    /// Removes a session that has not started, or ends the one running now.
+    func endStudySession(id: UUID) {
+        let now = Date()
+        var sessions = snapshot.rules.studySessions.filter { $0.isValid && $0.endsAt > now }
+        guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+        if sessions[index].startsAt <= now {
+            sessions[index].endsAt = now
+        } else {
+            sessions.remove(at: index)
+        }
+        snapshot.rules.studySessions = sessions.filter { $0.endsAt > now || $0.id == id }
+        commitRuleChange()
+    }
+
+    private func commitRuleChange() {
+        snapshot.rules.revision += 1
+        persist()
+        let rulesToUpload = snapshot.rules
+        Task { await uploadRulesIfPossible(rulesToUpload) }
+    }
+
     func setDailyUsageThresholdSeconds(_ seconds: Int?) {
         snapshot.rules.dailyUsageThresholdSeconds = seconds
         snapshot.rules.revision += 1
@@ -676,12 +727,21 @@ final class AppModel: ObservableObject {
         let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.restartIntoInstalledBuildIfNeeded()
+                self?.handOverToAutoRecoveryIfNeeded()
                 await self?.syncNow()
             }
         }
         syncTimer = timer
         RunLoop.main.add(timer, forMode: .common)
         Task { await syncNow() }
+    }
+
+    /// A paired child copy that launchd does not manage would stay down once killed, so it asks
+    /// launchd to start its own copy, which then replaces this one.
+    private func handOverToAutoRecoveryIfNeeded() {
+        guard snapshot.role == .child, snapshot.householdID != nil, !isBreakActive else { return }
+        persist()
+        LaunchAgentControl.handOverIfNeeded(state: autoRecoveryState)
     }
 
     /// After an update launchd may have restarted the old binary before the new bundle landed.
@@ -899,7 +959,19 @@ final class AppModel: ObservableObject {
     }
 
     private func applyPresence() {
-        presence.apply(role: snapshot.role, isPaired: snapshot.householdID != nil)
+        presence.apply(
+            role: snapshot.role,
+            isPaired: snapshot.householdID != nil,
+            exitPassword: snapshot.rules.childExitPassword
+        )
+    }
+
+    private func applyQuitPolicy() {
+        presence.applyQuitPolicy(
+            role: snapshot.role,
+            isPaired: snapshot.householdID != nil,
+            exitPassword: snapshot.rules.childExitPassword
+        )
     }
 
     private func presentActiveAlert() {

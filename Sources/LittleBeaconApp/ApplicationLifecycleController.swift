@@ -5,7 +5,17 @@ import LittleBeaconCore
 enum TerminationDecision: Equatable {
     case allow
     case reject
-    case requireParent
+    /// A paired child Mac whose parent has not set an exit password: say why, then keep running.
+    case explainRefusal
+    case requireParent(QuitCredential)
+}
+
+/// What the parent has to prove before an ordinary quit goes through.
+enum QuitCredential: Equatable {
+    /// An unpaired child Mac has no family rules yet, so the Mac's administrator password stands in.
+    case administrator
+    /// The password the parent set in the parent app (issue #19).
+    case exitPassword(ExitPassword)
 }
 
 /// Logout, restart and shutdown must never be held up by the app; `nil` means an ordinary quit.
@@ -29,15 +39,16 @@ func runsInBackground(role: DeviceRole, isPaired: Bool) -> Bool {
 /// What an ordinary quit (menu, Cmd-Q, Activity Monitor's "Quit") does on this Mac.
 enum OrdinaryQuitPolicy: Equatable {
     case allow
-    /// An unpaired child Mac is still being set up, so the parent may close it with their password.
-    case requireParent
-    /// A paired child Mac has no way out; anything that kills it is restarted by the LaunchAgent.
+    case requireParent(QuitCredential)
+    /// A paired child Mac without an exit password has no way out; anything that kills it is
+    /// restarted by the LaunchAgent.
     case refuse
 }
 
-func ordinaryQuitPolicy(role: DeviceRole, isPaired: Bool) -> OrdinaryQuitPolicy {
+func ordinaryQuitPolicy(role: DeviceRole, isPaired: Bool, exitPassword: ExitPassword? = nil) -> OrdinaryQuitPolicy {
     guard role == .child else { return .allow }
-    return isPaired ? .refuse : .requireParent
+    guard isPaired else { return .requireParent(.administrator) }
+    return exitPassword.map { .requireParent(.exitPassword($0)) } ?? .refuse
 }
 
 @MainActor
@@ -47,6 +58,8 @@ final class ApplicationTerminationGate {
     private var quitPolicy: OrdinaryQuitPolicy = .allow
     private var updateIsRelaunching = false
     private var postponedUpdateInstallers: [() -> Void] = []
+    /// Saves the child's state before an approved quit takes the process down.
+    var persistBeforeApprovedQuit: (() -> Void)?
 
     init() {}
 
@@ -79,8 +92,8 @@ final class ApplicationTerminationGate {
         if updateIsRelaunching { return .allow }
         switch quitPolicy {
         case .allow: return .allow
-        case .requireParent: return .requireParent
-        case .refuse: return .reject
+        case let .requireParent(credential): return .requireParent(credential)
+        case .refuse: return .explainRefusal
         }
     }
 }
@@ -90,9 +103,9 @@ final class ApplicationTerminationGate {
 final class ApplicationPresenceController {
     private var activityToken: NSObjectProtocol?
 
-    func apply(role: DeviceRole, isPaired: Bool) {
+    func apply(role: DeviceRole, isPaired: Bool, exitPassword: ExitPassword?) {
         NSApplication.shared.setActivationPolicy(runsInBackground(role: role, isPaired: isPaired) ? .accessory : .regular)
-        ApplicationTerminationGate.shared.setQuitPolicy(ordinaryQuitPolicy(role: role, isPaired: isPaired))
+        applyQuitPolicy(role: role, isPaired: isPaired, exitPassword: exitPassword)
 
         guard role == .child else {
             if let activityToken { ProcessInfo.processInfo.endActivity(activityToken) }
@@ -105,6 +118,13 @@ final class ApplicationPresenceController {
             reason: "孩子端在后台执行家庭规则"
         )
     }
+
+    /// Rules arrive by sync, so the password can change without the role changing.
+    func applyQuitPolicy(role: DeviceRole, isPaired: Bool, exitPassword: ExitPassword?) {
+        ApplicationTerminationGate.shared.setQuitPolicy(
+            ordinaryQuitPolicy(role: role, isPaired: isPaired, exitPassword: exitPassword)
+        )
+    }
 }
 
 @MainActor
@@ -113,14 +133,18 @@ final class ApplicationLifecycleController: NSObject, NSApplicationDelegate {
     private let parentAuthorizer: ParentAuthorizing
     private let quitReason: () -> OSType?
     private let replyToTermination: (Bool) -> Void
+    private let explainRefusal: () -> Void
+    private let stopAutoRecovery: () -> Void
     private var isAwaitingParent = false
 
     override convenience init() {
         self.init(
             gate: .shared,
-            parentAuthorizer: AdministratorPasswordAuthorizer(),
+            parentAuthorizer: FamilyQuitAuthorizer(),
             quitReason: { ApplicationLifecycleController.currentQuitReason() },
-            replyToTermination: { NSApp.reply(toApplicationShouldTerminate: $0) }
+            replyToTermination: { NSApp.reply(toApplicationShouldTerminate: $0) },
+            explainRefusal: { ExitPasswordPrompt.explainMissingPassword() },
+            stopAutoRecovery: { LaunchAgentControl.stopForThisLogin() }
         )
     }
 
@@ -128,12 +152,16 @@ final class ApplicationLifecycleController: NSObject, NSApplicationDelegate {
         gate: ApplicationTerminationGate,
         parentAuthorizer: ParentAuthorizing,
         quitReason: @escaping () -> OSType?,
-        replyToTermination: @escaping (Bool) -> Void
+        replyToTermination: @escaping (Bool) -> Void,
+        explainRefusal: @escaping () -> Void = {},
+        stopAutoRecovery: @escaping () -> Void = {}
     ) {
         self.gate = gate
         self.parentAuthorizer = parentAuthorizer
         self.quitReason = quitReason
         self.replyToTermination = replyToTermination
+        self.explainRefusal = explainRefusal
+        self.stopAutoRecovery = stopAutoRecovery
         super.init()
     }
 
@@ -143,14 +171,23 @@ final class ApplicationLifecycleController: NSObject, NSApplicationDelegate {
             return .terminateNow
         case .reject:
             return .terminateCancel
-        case .requireParent:
+        case .explainRefusal:
+            explainRefusal()
+            return .terminateCancel
+        case let .requireParent(credential):
             guard !isAwaitingParent else { return .terminateCancel }
             isAwaitingParent = true
             Task { @MainActor in
-                let approved = await parentAuthorizer.authorizeQuit()
+                let approved = await parentAuthorizer.authorizeQuit(with: credential)
                 isAwaitingParent = false
-                // A break can start while the system dialog is open.
-                replyToTermination(approved && !gate.blocksTermination)
+                // A break can start while the dialog is open.
+                let quits = approved && !gate.blocksTermination
+                if quits {
+                    gate.persistBeforeApprovedQuit?()
+                    // Without this the LaunchAgent would start the app again within seconds.
+                    stopAutoRecovery()
+                }
+                replyToTermination(quits)
             }
             return .terminateLater
         }

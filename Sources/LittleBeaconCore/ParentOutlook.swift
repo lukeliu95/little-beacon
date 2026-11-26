@@ -45,8 +45,15 @@ public struct DayOutlook: Equatable, Sendable {
     public var video: CategoryOutlook
     /// Today's school hours, when the parent has turned them on.
     public var quiet: DaySpan?
+    /// Today's part of every study session, merged.
+    public var study: [DaySpan]
+    /// Where the study session running now ends, in minutes from today's midnight (may pass 24:00).
+    public var studyEndsAtMinute: Int?
+
+    public var isStudyingNow: Bool { studyEndsAtMinute != nil }
 
     public var isQuietNow: Bool {
+        if isStudyingNow { return true }
         guard let quiet else { return false }
         return nowMinute >= quiet.startMinute && nowMinute < quiet.endMinute
     }
@@ -84,6 +91,12 @@ public struct DayOutlook: Equatable, Sendable {
         game = outlook(for: .game)
         video = outlook(for: .video)
         quiet = rules.schoolQuietHours.span(onWeekday: weekday)
+        study = Self.merged(rules.studySessions.filter(\.isValid).compactMap {
+            Self.span(from: $0.startsAt, to: $0.endsAt, dayStart: dayStart)
+        })
+        studyEndsAtMinute = rules.activeStudySession(at: date).map {
+            Int($0.endsAt.timeIntervalSince(dayStart) / 60)
+        }
     }
 
     public func isOpen(_ category: ActivityCategory) -> Bool {
@@ -95,6 +108,9 @@ public struct DayOutlook: Equatable, Sendable {
     }
 
     public var summary: String {
+        if let studyEndsAtMinute {
+            return "学习时段，到 \(clockText(studyEndsAtMinute % 1_440)) 小灯塔保持安静"
+        }
         if isQuietNow, let quiet {
             return "上学时段，到 \(clockText(quiet.endMinute)) 只提醒休息眼睛"
         }
@@ -132,8 +148,12 @@ public struct DayOutlook: Equatable, Sendable {
     }
 
     private static func span(of grant: TemporaryGrant, dayStart: Date) -> DaySpan? {
-        let startMinute = Int(grant.startsAt.timeIntervalSince(dayStart) / 60)
-        let endMinute = Int(grant.endsAt.timeIntervalSince(dayStart) / 60)
+        span(from: grant.startsAt, to: grant.endsAt, dayStart: dayStart)
+    }
+
+    private static func span(from start: Date, to end: Date, dayStart: Date) -> DaySpan? {
+        let startMinute = Int(start.timeIntervalSince(dayStart) / 60)
+        let endMinute = Int(end.timeIntervalSince(dayStart) / 60)
         guard endMinute > 0, startMinute < 1_440 else { return nil }
         return DaySpan(startMinute: max(0, startMinute), endMinute: min(1_440, endMinute))
     }
@@ -166,9 +186,11 @@ public func deviceHeadline(status: DeviceStatus, outlook: DayOutlook) -> String 
     guard status.isOnline else { return "孩子的 Mac 离线" }
     switch status.category {
     case .game:
+        if outlook.isStudyingNow { return "孩子的 Mac 在线，学习时段在玩游戏" }
         if outlook.isQuietNow { return "孩子的 Mac 在线，上学时段在玩游戏" }
         return outlook.game.isOpenNow ? "孩子的 Mac 在线，正在玩游戏" : "孩子正在玩游戏，现在不在允许时段"
     case .video:
+        if outlook.isStudyingNow { return "孩子的 Mac 在线，学习时段在看视频" }
         if outlook.isQuietNow { return "孩子的 Mac 在线，上学时段在看视频" }
         return outlook.video.isOpenNow ? "孩子的 Mac 在线，正在看视频" : "孩子正在看视频，现在不在允许时段"
     case .other:
