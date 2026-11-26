@@ -64,7 +64,8 @@ public extension RuleSet {
 }
 
 /// What the child Mac does on one monitor tick. School hours switch off everything but the
-/// gentle eye-care reminder; a parent's own remote close is not part of this and keeps working.
+/// gentle eye-care reminder, and a study session switches off that too. A parent's own remote
+/// close is not part of this and keeps working.
 public struct SupervisionPlan: Equatable, Sendable {
     public var pomodoroMode: PomodoroMode
     /// Schedules, outside-window reminders, endings, the "再玩 5 分钟" offer and violation events.
@@ -73,8 +74,9 @@ public struct SupervisionPlan: Equatable, Sendable {
     public var checksViewingDistance: Bool
 
     public init(rules: RuleSet, at date: Date) {
-        let isQuiet = rules.isQuiet(at: date)
-        pomodoroMode = rules.pomodoroMode(at: date)
+        let isStudying = rules.isStudying(at: date)
+        let isQuiet = isStudying || rules.isQuiet(at: date)
+        pomodoroMode = isStudying ? .off : rules.pomodoroMode(at: date)
         followsSchedule = !isQuiet
         countsDailyUsage = !isQuiet
         checksViewingDistance = !isQuiet

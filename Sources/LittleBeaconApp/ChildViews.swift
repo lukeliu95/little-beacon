@@ -381,11 +381,10 @@ struct ChildMenuPanel: View {
                 MenuPanelRow(title: "检查更新…") {
                     updates.checkForUpdates()
                 }
-                // A paired child Mac cannot be quit (ADR-0016); only setup keeps the password exit.
-                if model.snapshot.householdID == nil {
-                    MenuPanelRow(title: "退出小灯塔…") {
-                        NSApp.terminate(nil)
-                    }
+                // Paired: the parent's exit password (issue #19). Unpaired: the Mac's administrator.
+                MenuPanelRow(title: "退出小灯塔…") {
+                    dismiss()
+                    NSApp.terminate(nil)
                 }
             }
         }

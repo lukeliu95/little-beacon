@@ -107,6 +107,10 @@ export function defaultRules() {
       startMinute: 8 * 60,
       endMinute: 18 * 60,
     },
+    // One-off study stretches in which the child Mac stays completely quiet.
+    studySessions: [],
+    // Digest of the password the child types to quit; null means the child cannot quit.
+    childExitPassword: null,
   };
 }
 
@@ -117,6 +121,9 @@ const optionalRuleSettingKeys = [
   "viewingDistancePolicy",
   "defaultReminderStrategy",
   "schoolQuietHours",
+  "studySessions",
+  // A parent clearing the password sends null, which is kept; only a missing key is filled in.
+  "childExitPassword",
 ] as const;
 
 const reminderStrategies = ["gentle", "standard", "strict"];
@@ -149,6 +156,35 @@ function isValidQuietHours(value: unknown): boolean {
     && Number.isInteger(hours.startMinute) && Number(hours.startMinute) >= 0
     && Number.isInteger(hours.endMinute) && Number(hours.endMinute) <= 1_440
     && Number(hours.startMinute) < Number(hours.endMinute);
+}
+
+const maximumStudySessions = 20;
+const maximumStudyMilliseconds = 12 * 60 * 60 * 1_000;
+
+function isValidStudySessions(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length > maximumStudySessions) return false;
+  return value.every((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const session = item as Record<string, unknown>;
+    if (typeof session.id !== "string" || session.id.length === 0 || session.id.length > 64) return false;
+    if (typeof session.startsAt !== "string" || typeof session.endsAt !== "string") return false;
+    const startsAt = Date.parse(session.startsAt);
+    const endsAt = Date.parse(session.endsAt);
+    return Number.isFinite(startsAt) && Number.isFinite(endsAt)
+      && endsAt > startsAt && endsAt - startsAt <= maximumStudyMilliseconds;
+  });
+}
+
+function isValidExitPassword(value: unknown): boolean {
+  if (value === null) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const password = value as Record<string, unknown>;
+  const isShortText = (text: unknown) => typeof text === "string" && text.length > 0 && text.length <= 128;
+  return isShortText(password.salt)
+    && isShortText(password.digest)
+    && Number.isInteger(password.iterations)
+    && Number(password.iterations) >= 1_000
+    && Number(password.iterations) <= 10_000_000;
 }
 
 export function validateRuleSet(value: unknown): value is Record<string, unknown> {
@@ -204,6 +240,8 @@ export function validateRuleSet(value: unknown): value is Record<string, unknown
     }
   }
   if (rules.schoolQuietHours !== undefined && !isValidQuietHours(rules.schoolQuietHours)) return false;
+  if (rules.studySessions !== undefined && !isValidStudySessions(rules.studySessions)) return false;
+  if (rules.childExitPassword !== undefined && !isValidExitPassword(rules.childExitPassword)) return false;
   return rules.activityRules.every((rule) => {
     if (!rule || typeof rule !== "object") return false;
     const candidate = rule as Record<string, unknown>;

@@ -5,12 +5,15 @@ import Foundation
 enum AutoRecovery {
     static let label = "app.littlebeacon.mac"
     static let installedPropertyList = URL(fileURLWithPath: "/Library/LaunchAgents/app.littlebeacon.mac.plist")
+    /// launchd's wait before a restart. Its default is 10 seconds; families expect about five.
+    static let restartDelaySeconds = 5
 }
 
 enum AutoRecoveryState: Equatable {
-    /// Installed and restarts the app after every exit.
+    /// Installed and restarts the app within five seconds of every exit.
     case active
-    /// Installed by a version before 0.10, which only restarts the app after a crash.
+    /// Installed by an older script: before 0.10 it only restarted after a crash, and 0.10's
+    /// waited launchd's default 10 seconds.
     case outdated
     case missing
 
@@ -25,7 +28,10 @@ enum AutoRecoveryState: Equatable {
 
 func autoRecoveryState(fileExists: Bool, propertyList: [String: Any]?) -> AutoRecoveryState {
     guard fileExists else { return .missing }
-    return (propertyList?["KeepAlive"] as? Bool) == true ? .active : .outdated
+    guard (propertyList?["KeepAlive"] as? Bool) == true,
+          let delay = propertyList?["ThrottleInterval"] as? Int,
+          delay <= AutoRecovery.restartDelaySeconds else { return .outdated }
+    return .active
 }
 
 func readAutoRecoveryState(at url: URL = AutoRecovery.installedPropertyList) -> AutoRecoveryState {
@@ -77,10 +83,14 @@ enum SingleInstanceGuard {
         case .replace:
             // A paired child refuses an ordinary quit, so only a forced end works. State is
             // persisted every second, and an unfinished break is restored by this copy.
-            others.forEach { $0.forceTerminate() }
+            let pids = others.map(\.processIdentifier)
+            pids.forEach { kill($0, SIGKILL) }
+            // Wait without spinning the run loop: this runs inside App.init, before AppKit has
+            // finished launching, and running the loop here left CoreAudio stuck when AppModel
+            // then prepared the break sounds (the copy froze with no menu bar icon).
             let deadline = Date().addingTimeInterval(3)
-            while others.contains(where: { !$0.isTerminated }), Date() < deadline {
-                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            while pids.contains(where: { kill($0, 0) == 0 }), Date() < deadline {
+                usleep(50_000)
             }
         }
     }
@@ -102,4 +112,66 @@ func installedBuildNumber(bundleURL: URL = Bundle.main.bundleURL) -> String? {
 func shouldRestartIntoInstalledBuild(running: String?, installed: String?) -> Bool {
     guard let running, let installed else { return false }
     return running != installed
+}
+
+/// What a copy that launchd does not manage should do so the LaunchAgent takes over again.
+enum HandOverStep: Equatable {
+    case none
+    /// The agent file is there but launchd has not loaded it (a failed install, or a manual bootout).
+    case bootstrap
+    /// Loaded but not running, for example after Sparkle relaunched the app through Launch Services.
+    case kickstart
+}
+
+func handOverStep(state: AutoRecoveryState, isManagedByLaunchAgent: Bool, isLoaded: Bool) -> HandOverStep {
+    guard state == .active, !isManagedByLaunchAgent else { return .none }
+    return isLoaded ? .kickstart : .bootstrap
+}
+
+/// Talks to launchd about this Mac's own LaunchAgent. Everything here acts on the logged-in user's
+/// own session, so none of it needs an administrator.
+enum LaunchAgentControl {
+    private static var service: String { "gui/\(getuid())/\(AutoRecovery.label)" }
+
+    /// Only the real app owns the agent; `swift run` and test copies must never touch it.
+    private static var ownsTheAgent: Bool {
+        Bundle.main.bundlePath.hasSuffix(".app") && Bundle.main.bundleIdentifier == AutoRecovery.label
+    }
+
+    /// After a correct exit password: unload the job so launchd does not start the app again. The
+    /// file stays, so the next login starts the app as usual. launchd ends this process on the way.
+    static func stopForThisLogin() {
+        guard ownsTheAgent, isManagedByLaunchAgent() else { return }
+        run(["bootout", service])
+    }
+
+    /// Lets launchd's copy replace this one, which it does on launch (`SingleInstanceGuard`).
+    static func handOverIfNeeded(state: AutoRecoveryState) {
+        guard ownsTheAgent else { return }
+        let isLoaded = state == .active && run(["print", service]) == 0
+        switch handOverStep(state: state, isManagedByLaunchAgent: isManagedByLaunchAgent(), isLoaded: isLoaded) {
+        case .none:
+            return
+        case .bootstrap:
+            run(["bootstrap", "gui/\(getuid())", AutoRecovery.installedPropertyList.path])
+        case .kickstart:
+            run(["kickstart", service])
+        }
+    }
+
+    @discardableResult
+    private static func run(_ arguments: [String]) -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus
+        } catch {
+            return -1
+        }
+    }
 }
