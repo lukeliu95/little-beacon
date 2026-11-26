@@ -10,7 +10,8 @@ PLIST="/Library/LaunchAgents/$LABEL.plist"
 DOMAIN="gui/$UID"
 SERVICE="$DOMAIN/$LABEL"
 STATE="$HOME/Library/Application Support/LittleBeacon/state.json"
-MINIMUM_BUILD=10000
+# 0.10.0 froze for about a minute when launchd started it; 0.11.0 fixed that.
+MINIMUM_BUILD=11000
 
 fail() {
   echo "没有装好：$1" >&2
@@ -37,7 +38,7 @@ wait_for_new_pid() {
 
 [[ -d "$APP" ]] || fail "“应用程序”里没有小灯塔.app。请先把小灯塔拖进“应用程序”，再运行这条命令。"
 BUILD=$(plutil -extract CFBundleVersion raw "$APP/Contents/Info.plist" 2>/dev/null || echo 0)
-(( BUILD >= MINIMUM_BUILD )) || fail "这台 Mac 上的小灯塔太旧（构建号 $BUILD），请先升级到最新版本。"
+(( BUILD >= MINIMUM_BUILD )) || fail "这台 Mac 上的小灯塔太旧（构建号 $BUILD），请先升级到 0.11.0 或更新的版本（在小灯塔菜单里“检查更新”，或从 GitHub 下载）。"
 if [[ -f "$STATE" ]] && grep -Eq '"role" *: *"parent"' "$STATE"; then
   fail "这台 Mac 是家长端。自动恢复只装在孩子的 Mac 上，否则家长端会关不掉。"
 fi
